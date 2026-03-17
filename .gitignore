@@ -1,0 +1,14 @@
+node_modules/
+.sst/
+.env.local
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+.worktrees/
+worktrees/
+*.egg-info/
+dist/
+build/
+.DS_Store
