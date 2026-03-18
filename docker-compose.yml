@@ -1,8 +1,15 @@
-version: "3.8"
 services:
-  dynamodb-local:
+
+  # DynamoDB Local — the only Docker service needed locally.
+  # Backend and frontend run natively via start-backend.ps1 / start-frontend.ps1
+  dynamodb:
     image: amazon/dynamodb-local:latest
-    container_name: finops-dynamodb-local
+    container_name: finops-dynamodb
     ports:
-      - "8000:8000"
+      - "8003:8000"
     command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/shell/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

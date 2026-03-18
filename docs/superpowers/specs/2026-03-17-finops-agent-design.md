@@ -40,7 +40,7 @@ PDI runs infrastructure across multiple Datadog orgs (PDI-Enterprise, PDI-Orbis)
 Browser (React + Okta, port 3000 local / CloudFront AWS)
     │ Bearer <okta-token>
     ▼
-FastAPI Backend (Python, port 8001 local / ECS Fargate AWS)
+FastAPI Backend (Python, port 8004 local / ECS Fargate AWS)
     ├── GET  /api/results    → read from DynamoDB
     ├── GET  /api/status     → current run progress
     ├── POST /api/trigger    → kick off orchestrator agent
@@ -142,7 +142,7 @@ TENANTS = [
 ]
 ```
 
-All tenants share the same `DATADOG_MCP_URL`. The MCP's `tenant_id` parameter selects the org — no per-org MCP endpoint needed.
+All tenants share the same Datadog MCP endpoint. The MCP's `tenant_id` parameter selects the org — no per-org MCP endpoint needed. MCP servers are configured centrally via `MCP_REGISTRY` in `.env.local` (see §Environment Variables).
 
 ### 6.2 Org Analysis Flow — Two-Invocation Design
 
@@ -701,15 +701,15 @@ finops-agent/
 ## 12. Local Dev Setup
 
 ```bash
-# Terminal 1 — DynamoDB Local
-docker run -p 8000:8000 amazon/dynamodb-local
+# Terminal 1 — DynamoDB Local (port 8003 — avoids conflicts with other local apps)
+docker-compose up   # or: docker run -p 8003:8000 amazon/dynamodb-local
 
 # Terminal 2 — Python backend (APScheduler active when DYNAMODB_ENDPOINT is set)
 cd packages/backend
 pip install -r requirements.txt
-uvicorn main:app --reload --port 8001
+uvicorn main:app --reload --port 8004
 
-# Terminal 3 — React frontend
+# Terminal 3 — React frontend (port 3000 required for Okta callback)
 cd packages/frontend
 npm install && npm start    # http://localhost:3000
 ```
@@ -724,11 +724,15 @@ OKTA_ISSUER=https://your-domain.okta.com
 OKTA_CLIENT_ID=your-client-id
 OKTA_M2M_CLIENT_ID=your-m2m-client-id
 OKTA_M2M_CLIENT_SECRET=your-m2m-client-secret
-DATADOG_MCP_URL=https://dm9vya05q5.execute-api.us-east-1.amazonaws.com/mcp
+# MCP Registry — central config for all MCP servers (JSON array)
+# auth modes: "okta_forward" | "none" | "env:MY_VAR_NAME"
+MCP_REGISTRY=[{"name":"datadog","url":"https://dm9vya05q5.execute-api.us-east-1.amazonaws.com/mcp","transport":"http","auth":"okta_forward"}]
+DATADOG_MCP_URL=https://dm9vya05q5.execute-api.us-east-1.amazonaws.com/mcp  # legacy fallback
 AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=your-key
 AWS_SECRET_ACCESS_KEY=your-secret
-DYNAMODB_ENDPOINT=http://localhost:8000   # presence enables APScheduler + local DynamoDB
+DYNAMODB_ENDPOINT=http://localhost:8003   # presence enables APScheduler + local DynamoDB
+BACKEND_URL=http://localhost:8004
 SCHEDULER_CRON=0 2 * * *
 ```
 
@@ -736,17 +740,17 @@ SCHEDULER_CRON=0 2 * * *
 ```
 REACT_APP_OKTA_CLIENT_ID=your-client-id
 REACT_APP_OKTA_ISSUER=https://your-domain.okta.com
-REACT_APP_API_URL=http://localhost:8001
+REACT_APP_API_URL=http://localhost:8004
 ```
 
 ### Local → AWS Parity
 
 | Concern | Local | AWS |
 |---|---|---|
-| DynamoDB | Docker port 8000 | Real DynamoDB |
+| DynamoDB | Docker port 8003 | Real DynamoDB |
 | Scheduler | APScheduler in FastAPI (DYNAMODB_ENDPOINT present) | EventBridge + Lambda |
 | Frontend | npm start port 3000 | CloudFront |
-| Backend | uvicorn port 8001 | ECS Fargate |
+| Backend | uvicorn port 8004 | ECS Fargate |
 | Okta (user) | Real Okta (localhost:3000 allowed) | Real Okta (CloudFront URL) |
 | Okta (M2M) | Client credentials (same Okta tenant) | Client credentials (same Okta tenant) |
 | Datadog MCP | Live endpoint (same URL) | Live endpoint (same URL) |

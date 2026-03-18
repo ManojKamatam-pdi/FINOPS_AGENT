@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__plugin_serena_serena__list_dir",
+      "mcp__plugin_serena_serena__activate_project",
+      "Read(//c/Users/manoj.kamatam/Documents/Hackathon/Datadog_as_MCP/**)",
+      "Bash(dir \"C:\\\\Users\\\\manoj.kamatam\\\\Documents\\\\Hackathon\\\\Datadog_as_MCP\")",
+      "Bash(cd:*)",
+      "mcp__plugin_serena_serena__initial_instructions",
+      "Bash(ls:*)",
+      "Bash(\"C:\\\\Users\\\\manoj.kamatam\\\\Downloads\\\\nodejs\\\\node.exe\" \"C:\\\\Users\\\\manoj.kamatam\\\\Downloads\\\\nodejs\\\\node_modules\\\\npm\\\\bin\\\\npm-cli.js\" --version 2>&1)",
+      "Bash(node_path=\"/c/Users/manoj.kamatam/Downloads/nodejs/node.exe\" && npm_cli=\"/c/Users/manoj.kamatam/Downloads/nodejs/node_modules/npm/bin/npm-cli.js\" && \"$node_path\" \"$npm_cli\" --version 2>&1)",
+      "WebFetch(domain:pricing.us-east-1.amazonaws.com)",
+      "WebSearch",
+      "WebFetch(domain:calculator.aws)",
+      "Read(//c/Users/manoj.kamatam/Documents/PDI_AI/IAC_Agent/**)",
+      "Read(//c/Users/manoj.kamatam/.config/superpowers/worktrees/FinOps_Agent/feature/mcp-registry/**)",
+      "Bash(python -m pytest packages/backend/tests/ -q --tb=short)",
+      "Skill(claude-api)",
+      "Bash(python:*)",
+      "Bash(\"C:\\\\Program Files\\\\nodejs\\\\npm.cmd\" run build)",
+      "Read(//mnt/c/Users/manoj.kamatam/Documents/FinOps_Agent/packages/**)",
+      "Bash(npm install:*)",
+      "mcp__plugin_serena_serena__read_memory",
+      "Bash(dir:*)",
+      "WebFetch(domain:docs.datadoghq.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}

@@ -2,11 +2,20 @@
   "name": "finops-agent",
   "version": "1.0.0",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "dev:backend": "cd packages/backend && uvicorn main:app --reload --port 8001",
-    "dev:frontend": "cd packages/frontend && npm start",
+    "dev": "docker-compose up --build",
+    "dev:down": "docker-compose down",
     "deploy": "sst deploy",
-    "deploy:prod": "sst deploy --stage prod"
+    "deploy:prod": "sst deploy --stage prod",
+    "test:setup": "npx playwright test --project=setup",
+    "test:e2e": "npx playwright test --project=e2e",
+    "test:report": "npx playwright show-report playwright/report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "typescript": "^5.9.3"
   }
 }

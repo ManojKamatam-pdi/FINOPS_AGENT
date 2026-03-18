@@ -1,0 +1,86 @@
+{
+  "cookies": [
+    {
+      "name": "DT",
+      "value": "DI1RLwtDy3MQfqUAnxnPKQMmg",
+      "domain": "pdisoftware.okta.com",
+      "path": "/",
+      "expires": 1808374248.304559,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "ln",
+      "value": "manoj.kamatam@pditechnologies.com",
+      "domain": "pdisoftware.okta.com",
+      "path": "/",
+      "expires": 1805350266,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "JSESSIONID",
+      "value": "B9536809C3AD6D222C61FA7CA0217BA0",
+      "domain": "pdisoftware.okta.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "idx",
+      "value": "eyJ6aXAiOiJERUYiLCJ2ZXIiOiIxIiwiYWxpYXMiOiJlbmNyeXB0aW9ua2V5Iiwib2lkIjoiMDBvMXFsN3A0ekJJdG1seDYycDciLCJlbmMiOiJBMjU2R0NNIiwiYWxnIjoiZGlyIiwieHNpZCI6ImlkeEVsMnk3TnpwVDB5NE8tOGkxUlVqWWcifQ..-NSDvHOc1EKzX_NJ.UUH7g038W2ir96bghyzuGrQj6_xkbl239wjHCyUdwOlpiPMLUSct6fVOm9qpAZ20sKHzQwcAunBXDvn85f5rmxXmegzRxCjcY_t4JYAXWdTibBTDt2q7vwoS0pievo0sGTrJW718HIQaK5C7tlmtQgyes_0BbTxU6CiwPTO_EI4foV03zIzoZJmzEKYksvnRl-JthLe9MZFANT1aibFRWBEkAOFdyDlb7aFucoPfPkps-FhzspDrOMlE2KrqkMmEzrIhMO6eMM-G8x8SAo30K5_tC3x1lDki8E3Ovb4zCrTtqaqAJNqH5unwL1r8iU4KTyWuHgMYytR_kgh1OsKVNoP_pmxTbbFIuTTqBtEqoBziICliVmoPByaPGbaWA6ZMhZKXqwZ0AMzSGjJodkmj8jVAeDv9JJJ3rGYrdPIOk4ClygtwIVgjzJPnZkH1ItViqHLIRjKMPp0KXH0QD5HwTKVfFBtLVZlXnMClZjDdDHb944YBbSiHz_1H1ajjMPbIedm2XUuao6GD5It_xLRWHqcsVOGtNleWKB8CmeX3dEPhIe56_cjUaILNfZmJ24YSHsHKQHpqfpoi0XVLJe-qJeZ-NnWPV484Mfe3zT9CFZH7q6QLfatgu4ijAVdiiItYoysigoV3Xgv7XadROFUMdSOAvyeMQSQOLGvppsRyyxJ8HKE-5SA5piNwZP49vzzDW89Ml6sporpRpeLkyErs064EzScGN4BRJCySkXTOPlblIaf6YsqsseXrwnWcMDHqlzBXuGgXR8ajOURdRjHPql2rihmTS6HsSXVJ2yjC4eBQwWW16ZXu3wSTaq1US3dpfcv9WFdNdU-CjLskiWtsyaSprarFgXSWYop0DdxjV-mUKy4yUclFhd7YvsedBeTRwrSmuBm26skzNhsi_5GuGAMH9EJkvRMbqqXGSXJskhqM1LVA7xkwKTkiu0VqrSfodiq3eF7Eh-v0tOvuXinU7nQmiW9tN9CZudVnWDpMRkl9ioOiVZDwGBKeJX4DiBfqnjIvS5lK2jlsn4_kNAycMNyuZ2v1WOpWZjPaWroI6p4mmm7v_HWgTSLyQdsCZF4Wg61mFKkzRCuydR43rdnUeqIoHLT4o3DVwG3M49igHogqmS5oV6SFt09jIQ.NGqtL0TZGi55uulOmGh2zg",
+      "domain": "pdisoftware.okta.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "luf_-359845062",
+      "value": "eyJ6aXAiOiJERUYiLCJ2ZXIiOiIxIiwiYWxpYXMiOiJlbmNyeXB0aW9ua2V5Iiwib2lkIjoiMDBvMXFsN3A0ekJJdG1seDYycDciLCJlbmMiOiJBMjU2R0NNIiwiYWxnIjoiZGlyIiwidGltZXN0YW1wIjoxNzczODE0MjkxODc3fQ..Ij1Z7KnWL1-jcd3R.m1AW_utpqMCp5hgYSXkF3rqGfCreeZ9Fl8KcGQxvj0nH1h3yxEfJtKHuhyRXXrq7LY1wxS5CN-QgsEtmjLGbFGR-6n-0Cko7Jzh01MC4uLJizwB91nR9dbRvn73cO6cLWnVDfuyyL7lFco2D99royXRprYWFXtsS-2mOzRPxnaFV8sk_NvXzPiUQKaj7MMogGC4asvpAcRWDafVWCfaoAEToodGAbUt-xLZr6yMRLB5uW7HW5V608vQmIgsI7znjRfBKUDlSecDkP6mjxpu8-FPPYED_JQ.B2mDMa2tBmuzJSa4DQSJ-w",
+      "domain": "pdisoftware.okta.com",
+      "path": "/",
+      "expires": 1776406274.325442,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "http://localhost:3000",
+      "localStorage": [
+        {
+          "name": "okta-cache-storage",
+          "value": "{\"https://pdisoftware.okta.com/.well-known/openid-configuration\":{\"expiresAt\":1773900647,\"response\":{\"issuer\":\"https://pdisoftware.okta.com\",\"authorization_endpoint\":\"https://pdisoftware.okta.com/oauth2/v1/authorize\",\"token_endpoint\":\"https://pdisoftware.okta.com/oauth2/v1/token\",\"userinfo_endpoint\":\"https://pdisoftware.okta.com/oauth2/v1/userinfo\",\"registration_endpoint\":\"https://pdisoftware.okta.com/oauth2/v1/clients\",\"jwks_uri\":\"https://pdisoftware.okta.com/oauth2/v1/keys\",\"response_types_supported\":[\"code\",\"id_token\",\"code id_token\",\"code token\",\"id_token token\",\"code id_token token\"],\"response_modes_supported\":[\"query\",\"fragment\",\"form_post\",\"okta_post_message\"],\"grant_types_supported\":[\"authorization_code\",\"implicit\",\"refresh_token\",\"password\",\"urn:ietf:params:oauth:grant-type:device_code\",\"urn:openid:params:grant-type:ciba\",\"urn:okta:params:oauth:grant-type:otp\",\"http://auth0.com/oauth/grant-type/mfa-otp\",\"urn:okta:params:oauth:grant-type:oob\",\"http://auth0.com/oauth/grant-type/mfa-oob\"],\"subject_types_supported\":[\"public\"],\"id_token_signing_alg_values_supported\":[\"RS256\"],\"id_token_encryption_alg_values_supported\":[\"RSA-OAEP-256\",\"RSA-OAEP-384\",\"RSA-OAEP-512\"],\"id_token_encryption_enc_values_supported\":[\"A256GCM\"],\"scopes_supported\":[\"openid\",\"email\",\"profile\",\"address\",\"phone\",\"offline_access\",\"groups\"],\"token_endpoint_auth_methods_supported\":[\"client_secret_basic\",\"client_secret_post\",\"client_secret_jwt\",\"private_key_jwt\",\"none\"],\"claims_supported\":[\"iss\",\"ver\",\"sub\",\"aud\",\"iat\",\"exp\",\"jti\",\"auth_time\",\"amr\",\"idp\",\"nonce\",\"name\",\"nickname\",\"preferred_username\",\"given_name\",\"middle_name\",\"family_name\",\"email\",\"email_verified\",\"profile\",\"zoneinfo\",\"locale\",\"address\",\"phone_number\",\"picture\",\"website\",\"gender\",\"birthdate\",\"updated_at\",\"at_hash\",\"c_hash\"],\"code_challenge_methods_supported\":[\"S256\"],\"introspection_endpoint\":\"https://pdisoftware.okta.com/oauth2/v1/introspect\",\"introspection_endpoint_auth_methods_supported\":[\"client_secret_basic\",\"client_secret_post\",\"client_secret_jwt\",\"private_key_jwt\",\"none\"],\"revocation_endpoint\":\"https://pdisoftware.okta.com/oauth2/v1/revoke\",\"revocation_endpoint_auth_methods_supported\":[\"client_secret_basic\",\"client_secret_post\",\"client_secret_jwt\",\"private_key_jwt\",\"none\"],\"end_session_endpoint\":\"https://pdisoftware.okta.com/oauth2/v1/logout\",\"request_parameter_supported\":true,\"request_object_signing_alg_values_supported\":[\"HS256\",\"HS384\",\"HS512\",\"RS256\",\"RS384\",\"RS512\",\"ES256\",\"ES384\",\"ES512\"],\"device_authorization_endpoint\":\"https://pdisoftware.okta.com/oauth2/v1/device/authorize\",\"pushed_authorization_request_endpoint\":\"https://pdisoftware.okta.com/oauth2/v1/par\",\"backchannel_token_delivery_modes_supported\":[\"poll\"],\"backchannel_authentication_request_signing_alg_values_supported\":[\"HS256\",\"HS384\",\"HS512\",\"RS256\",\"RS384\",\"RS512\",\"ES256\",\"ES384\",\"ES512\"],\"dpop_signing_alg_values_supported\":[\"RS256\",\"RS384\",\"RS512\",\"ES256\",\"ES384\",\"ES512\"],\"headers\":{\"cache-control\":\"max-age=86400, must-revalidate\",\"content-type\":\"application/json\",\"expires\":\"Thu, 19 Mar 2026 06:11:04 GMT\"}}},\"https://pdisoftware.okta.com/oauth2/v1/keys\":{\"expiresAt\":1773900675,\"response\":{\"keys\":[{\"kty\":\"RSA\",\"alg\":\"RS256\",\"kid\":\"jf4OzI3--m8v-1tAMRHYyTjn5Gioc5VPcJcgReN9Hx4\",\"use\":\"sig\",\"e\":\"AQAB\",\"n\":\"rKUnzQN8zJ78S8C8cwpwCVvxUV1yNYmfmn2NkBsXkxniAdDbv3vhYvWyfAuStyoxzAHPO1_gzS2XMIGrtuFr1U5ApABjeyOCPzMK8k-nQEOK609quIOotsq2yzTQO-82W6b9cfDye7SINiAvBfn406JweYmj6nL8Qp4n0LpTho8s9knJAwaJwQX_BPaK2b-zW_iGFYRg4B_hglai9Y_RdmCqWlhUomdM0Nuw9rPOoHDeQX_MCPA_jjOWnNoafAvsjPOMU7pH2l2h5ib2DVLvMdXpethoIwOZSxGanpjtKqaHZYLzX4JD-DLaiyJvrioPkkG1Et-MkjnitXWgcZQbkQ\"},{\"kty\":\"RSA\",\"alg\":\"RS256\",\"kid\":\"zbYQ08c7DyOH7U3v24V3HgM8oerDsoTXFckO7ijZ0y0\",\"use\":\"sig\",\"e\":\"AQAB\",\"n\":\"pKTPGR_0OA9Y2y3AI4Of2sY7YjhLgD2PVa8lRoOvfpoFJcsmht11JDXYA8SiSiLfShc0ddb7FeRjxpdqispL-gI9sTUcjmSpeVNRiX5-bVWO--vnW1PBFQeSIrqOnrk_GEyrY3fHnR6WtNTI_TgXWbbAGM96CUWC0YLJCHk-_FcqovPZgKsHg6Fwbum7bE5xyxO2jh_5cPoj9bGr2NvfegMJxduyeXkVvnyKIt9JAKY7Hs9jSEJRzCMk_BKXXfdzmPDtbK9cBwIx_76jfqBvaMleWT-0AgM4Wq2Kbi1aOveMd2ZviHGiZFIoZXjHskBZFlRgpqwsxNepwkg0novj5Q\"}],\"headers\":{\"cache-control\":\"max-age=5431796, must-revalidate\",\"content-type\":\"application/json\",\"expires\":\"Wed, 20 May 2026 03:01:29 GMT\"}}}}"
+        },
+        {
+          "name": "okta-original-uri-storage",
+          "value": "{}"
+        },
+        {
+          "name": "okta-shared-transaction-storage",
+          "value": "{}"
+        },
+        {
+          "name": "okta-token-storage",
+          "value": "{\"idToken\":{\"idToken\":\"eyJraWQiOiJqZjRPekkzLS1tOHYtMXRBTVJIWXlUam41R2lvYzVWUGNKY2dSZU45SHg0IiwiYWxnIjoiUlMyNTYifQ.eyJzdWIiOiIwMHVyZmVlOTR5TkV6QTJObjJwNyIsIm5hbWUiOiJLYW1hdGFtLCBNYW5vaiIsImVtYWlsIjoibWFub2oua2FtYXRhbUBwZGl0ZWNobm9sb2dpZXMuY29tIiwidmVyIjoxLCJpc3MiOiJodHRwczovL3BkaXNvZnR3YXJlLm9rdGEuY29tIiwiYXVkIjoiMG9hMTl2eGplMTdkTUc0TkoycDgiLCJpYXQiOjE3NzM4MTQyOTIsImV4cCI6MTc3MzgxNzg5MiwianRpIjoiSUQuX0J0UGE5a2ZlM1RoLVpDcGlOUkt5cE5yQmtSb21RVUhUcHk3RTNXN3RpQSIsImFtciI6WyJzd2siLCJtZmEiLCJwd2QiXSwiaWRwIjoiMDBvMXFsN3A0ekJJdG1seDYycDciLCJub25jZSI6InBjQzBreHA3MlpHUUVBUExiWDFNdmx4Wno5TURlMFk5R2lkTTNFODVpeHlIUmNUZGRRbGd5S2F2VnBXWDc5YW8iLCJwcmVmZXJyZWRfdXNlcm5hbWUiOiJtYW5vai5rYW1hdGFtQHBkaXRlY2hub2xvZ2llcy5jb20iLCJhdXRoX3RpbWUiOjE3NzM4MTQyOTEsImF0X2hhc2giOiJkYS1VRlotMERxN3paUXhmM1NWUDl3In0.DWh1k0CfBIh_2wIFhmPZUNLt9szGgCmhDayElrx07DRB-WjYVzNhXoPteku85mV7YQucv7OJjaFiQZelYINtW4T_MSdFZz1f1Uk9G93n8juumhrRSB8QkHVr0rd4NefJ-nk7SOprsPFPBnZtdE4hOMCP4lJKgkBzi0oYPL6fE2gmB0hHHz1ayGIDhwYAGErJsb0rV3bjXf76zI5ORhIPIw-DF8ehyqCcF54W8U9aNDXW85KKX2RlchiTdwY71uYid5XxbB4nH5VxxfN23cRnv33EhKKZco5fydhm899NEGY-k1SRSHYKnuvfKF46iw_bi6bIZ9dhK_shl1zpBveTVw\",\"claims\":{\"sub\":\"00urfee94yNEzA2Nn2p7\",\"name\":\"Kamatam, Manoj\",\"email\":\"manoj.kamatam@pditechnologies.com\",\"ver\":1,\"iss\":\"https://pdisoftware.okta.com\",\"aud\":\"0oa19vxje17dMG4NJ2p8\",\"iat\":1773814292,\"exp\":1773817892,\"jti\":\"ID._BtPa9kfe3Th-ZCpiNRKypNrBkRomQUHTpy7E3W7tiA\",\"amr\":[\"swk\",\"mfa\",\"pwd\"],\"idp\":\"00o1ql7p4zBItmlx62p7\",\"nonce\":\"pcC0kxp72ZGQEAPLbX1MvlxZz9MDe0Y9GidM3E85ixyHRcTddQlgyKavVpWX79ao\",\"preferred_username\":\"manoj.kamatam@pditechnologies.com\",\"auth_time\":1773814291,\"at_hash\":\"da-UFZ-0Dq7zZQxf3SVP9w\"},\"expiresAt\":1773817875,\"scopes\":[\"openid\",\"profile\",\"email\"],\"authorizeUrl\":\"https://pdisoftware.okta.com/oauth2/v1/authorize\",\"issuer\":\"https://pdisoftware.okta.com\",\"clientId\":\"0oa19vxje17dMG4NJ2p8\"},\"accessToken\":{\"accessToken\":\"eyJraWQiOiJqZjRPekkzLS1tOHYtMXRBTVJIWXlUam41R2lvYzVWUGNKY2dSZU45SHg0IiwidHlwIjoiYXBwbGljYXRpb24vb2t0YS1pbnRlcm5hbC1hdCtqd3QiLCJhbGciOiJSUzI1NiJ9.eyJ2ZXIiOjEsImp0aSI6IkFULmh0RmNicGVUcFlWSFRtR0QxR1dNM200T204bHJGOE14UHBZby1QUzJSdmciLCJpc3MiOiJodHRwczovL3BkaXNvZnR3YXJlLm9rdGEuY29tIiwiYXVkIjoiaHR0cHM6Ly9wZGlzb2Z0d2FyZS5va3RhLmNvbSIsInN1YiI6Im1hbm9qLmthbWF0YW1AcGRpdGVjaG5vbG9naWVzLmNvbSIsImlhdCI6MTc3MzgxNDI5MiwiZXhwIjoxNzczODE3ODkyLCJjaWQiOiIwb2ExOXZ4amUxN2RNRzROSjJwOCIsInVpZCI6IjAwdXJmZWU5NHlORXpBMk5uMnA3Iiwic2NwIjpbIm9wZW5pZCIsInByb2ZpbGUiLCJlbWFpbCJdLCJhdXRoX3RpbWUiOjE3NzM4MTQyOTF9.BbhJbYl1CU65uIfJBhoik1pLesYWDdMVAYhs8J_YAxSDet7z9UVVGU6Ptc5XReqFpLwyIU_vOpt8nJC0j50vKWVTS78SLDl41Yh6j2hGo0lpeZrvr9SJFwktG3MYzgCNYmyKA30PsNoTB4HQG_0g7KBRdgtbOEhw4wEUMEjpthxygIH_6Oz1PahyjWkjmRxRcZ8c7_RosLRIx_9HoLzPDti3RRAaQXhMr4uzsWd7dLzx08VwaosGF1PbhdgHIlI2VGezpyyDk0HNWfe1LgHerLoVeZs7UFMxkbFprDLSvc7I6IWrBwDgtDV92TAdJc3KnGzjOJFovsHadzoIdQvIpQ\",\"claims\":{\"ver\":1,\"jti\":\"AT.htFcbpeTpYVHTmGD1GWM3m4Om8lrF8MxPpYo-PS2Rvg\",\"iss\":\"https://pdisoftware.okta.com\",\"aud\":\"https://pdisoftware.okta.com\",\"sub\":\"manoj.kamatam@pditechnologies.com\",\"iat\":1773814292,\"exp\":1773817892,\"cid\":\"0oa19vxje17dMG4NJ2p8\",\"uid\":\"00urfee94yNEzA2Nn2p7\",\"scp\":[\"openid\",\"profile\",\"email\"],\"auth_time\":1773814291},\"expiresAt\":1773817875,\"tokenType\":\"Bearer\",\"scopes\":[\"openid\",\"profile\",\"email\"],\"authorizeUrl\":\"https://pdisoftware.okta.com/oauth2/v1/authorize\",\"userinfoUrl\":\"https://pdisoftware.okta.com/oauth2/v1/userinfo\"}}"
+        }
+      ]
+    },
+    {
+      "origin": "https://login.okta.com",
+      "localStorage": [
+        {
+          "name": "okta_accounts",
+          "value": "[{\"id\":\"https://pdisoftware.okta.com::manoj.kamatam@pditechnologies.com\",\"login\":\"manoj.kamatam@pditechnologies.com\",\"displayName\":\"Manoj Kamatam\",\"origin\":\"https://pdisoftware.okta.com\",\"lastUpdated\":\"2026-03-18T06:11:14.004Z\"}]"
+        }
+      ]
+    }
+  ]
+}
