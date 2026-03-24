@@ -6,12 +6,22 @@ Write-Host "PDI FinOps Agent - Backend Startup" -ForegroundColor Cyan
 Write-Host "====================================" -ForegroundColor Cyan
 Write-Host ""
 
-# Fix PATH: remove inaccessible INHYDPDI NVM entry
-$env:PATH = ($env:PATH -split ";" | Where-Object { $_ -notmatch "INHYDPDI" }) -join ";"
+# ---------------------------------------------------------------------------
+# Fix PATH: strip inaccessible INHYDPDI NVM entries, pin to system Node
+# ---------------------------------------------------------------------------
+$env:PATH = ($env:PATH -split ";" | Where-Object { $_ -notmatch "INHYDPDI" -and $_ -notmatch "nvm" }) -join ";"
 $env:PATH = "C:\Program Files\nodejs;" + $env:PATH
+
+# Prevent Node from resolving the old user-profile prefix
+$env:npm_config_prefix  = "$env:APPDATA\npm"
+$env:npm_config_cache   = "$env:LOCALAPPDATA\npm-cache"
+$env:NODE_PATH          = "$env:APPDATA\npm\node_modules"
 
 $node = "C:\Program Files\nodejs\node.exe"
 $npm  = "C:\Program Files\nodejs\npm.cmd"
+
+Write-Host "Node: $(& $node --version)   npm: $(& $npm --version)" -ForegroundColor Green
+Write-Host ""
 
 # Step 1: Start DynamoDB Local via Docker
 Write-Host "Starting DynamoDB Local (port 8003)..." -ForegroundColor Cyan
@@ -21,7 +31,7 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# Step 2: Wait for DynamoDB Local to be ready (Node.js TCP probe - no Python needed)
+# Step 2: Wait for DynamoDB Local to be ready
 Write-Host "Waiting for DynamoDB Local..." -ForegroundColor Cyan
 $timeout = 30
 $elapsed = 0
@@ -50,23 +60,24 @@ foreach ($p in $pids8005) {
 }
 Start-Sleep -Seconds 1
 
-# Step 4: Install deps if needed (check for jose which was recently added)
+# Step 4: Install deps if needed
 $agentDir = "$PSScriptRoot\packages\agent"
 if (-not (Test-Path "$agentDir\node_modules\jose")) {
     Write-Host "Installing agent dependencies..." -ForegroundColor Gray
-    & $npm install --prefix $agentDir --legacy-peer-deps --silent
+    & $npm install --prefix $agentDir --legacy-peer-deps
+    if ($LASTEXITCODE -ne 0) { Write-Host "npm install failed" -ForegroundColor Red; exit 1 }
 }
 
-# Step 5: Build TypeScript
+# Step 5: Build TypeScript (show output so errors are visible)
 Write-Host "Building TypeScript agent..." -ForegroundColor Cyan
-& $npm run build --prefix $agentDir 2>&1 | Out-Null
+& $npm run build --prefix $agentDir
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed - check packages/agent/src for errors" -ForegroundColor Red
     exit 1
 }
 Write-Host "Build complete" -ForegroundColor Green
 
-# Step 6: Start agent server (foreground - blocks until Ctrl+C)
+# Step 6: Start agent server
 Write-Host ""
 Write-Host "Starting FinOps Agent Server on http://localhost:8005 ..." -ForegroundColor Green
 Write-Host "  API:    http://localhost:8005/api"

@@ -1,48 +1,35 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { Options, SDKResultSuccess } from "@anthropic-ai/claude-agent-sdk";
-import { getMcpServers } from "../config/mcp-registry.js";
 import { createListHostsServer } from "../mcp-servers/list-hosts-server.js";
 
 export async function runListHostsAgent(
   tenantId: string,
-  oktaToken: string,
   runId: string
 ): Promise<void> {
   const localServer = createListHostsServer(tenantId, runId);
 
   const systemPrompt = `You are a host discovery agent for the Datadog org '${tenantId}'.
 
-The Datadog MCP exposes 3 tools:
-- query-datadog(tenant_id, query): triggers a Datadog Workflow → AI Agent, returns {instance_id, status: "running"}
-- check-status(tenant_id, instance_id): polls the workflow; returns status "running"|"completed"|"failed", and when completed returns the agent's answer
-- list-tenants(): lists available orgs
+You have ONE tool: fetch_and_store_all_hosts_tool
 
-Your task:
-1. Call query-datadog with tenant_id="${tenantId}" and query:
-   "List ALL monitored hosts in this org. For each host return: host_id, host_name, and any tags including instance_type and region. Return as a JSON array."
-2. You will receive an instance_id immediately. The workflow is now running.
-3. Call check-status(tenant_id="${tenantId}", instance_id=<the id you got>) repeatedly until status is "completed" or "failed".
-4. When completed, parse the agent's response to extract the host list as a JSON array of {host_id, host_name} objects.
-5. Call write_host_list_tool with the JSON array.
-6. Call update_hosts_total_tool with the total count.
-7. Confirm completion.
-
-Important:
-- Keep polling check-status until you get a completed/failed status — do not stop after the first "running" response.
-- If the response is a string (not JSON), extract host information from the text as best you can.
-- If status is "failed", write an empty host list and log the failure.`;
+Call it once. It fetches all hosts from Datadog (handling pagination internally), writes them to DynamoDB, and updates the run total.
+After it returns successfully, stop.`;
 
   const options: Options = {
     systemPrompt,
     permissionMode: "bypassPermissions",
-    maxTurns: 30,
+    tools: [],
+    maxTurns: 10,
     mcpServers: {
       "list-hosts-tools": localServer,
-      ...getMcpServers(["datadog"], oktaToken),
+      // No Datadog MCP needed — the tool calls the REST API directly
     },
   };
 
-  for await (const msg of query({ prompt: `List all hosts in Datadog org '${tenantId}' and write them to DynamoDB.`, options })) {
+  for await (const msg of query({
+    prompt: `Fetch and store all hosts for Datadog org '${tenantId}' by calling fetch_and_store_all_hosts_tool.`,
+    options,
+  })) {
     if (msg.type === "assistant") {
       const content = (msg as { message?: { content?: unknown[] } }).message?.content;
       if (Array.isArray(content)) {
@@ -56,7 +43,6 @@ Important:
     if (msg.type === "result") {
       const r = msg as SDKResultSuccess & { is_error?: boolean; stop_reason?: string };
       if (r.is_error) console.error(`[list_hosts:${tenantId}] Agent run failed: ${r.result}`);
-      else if (r.stop_reason === "max_turns") console.warn(`[list_hosts:${tenantId}] Hit max_turns limit`);
       else console.log(`[list_hosts:${tenantId}] Completed: stop_reason=${r.stop_reason}`);
     }
   }

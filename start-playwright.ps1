@@ -8,8 +8,12 @@ Write-Host "=========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Fix PATH: remove inaccessible INHYDPDI NVM entry
-$env:PATH = ($env:PATH -split ";" | Where-Object { $_ -notmatch "INHYDPDI" }) -join ";"
+$env:PATH = ($env:PATH -split ";" | Where-Object { $_ -notmatch "INHYDPDI" -and $_ -notmatch "nvm" }) -join ";"
 $env:PATH = "C:\Program Files\nodejs;" + $env:PATH
+
+$env:npm_config_prefix  = "$env:APPDATA\npm"
+$env:npm_config_cache   = "$env:LOCALAPPDATA\npm-cache"
+$env:NODE_PATH          = "$env:APPDATA\npm\node_modules"
 
 $npm = "C:\Program Files\nodejs\npm.cmd"
 $pw  = "$PSScriptRoot\node_modules\.bin\playwright.cmd"

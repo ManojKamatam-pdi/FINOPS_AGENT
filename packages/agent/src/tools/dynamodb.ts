@@ -35,7 +35,7 @@ function getClient(): DynamoDBDocumentClient {
 export async function writeHostList(
   tenantId: string,
   runId: string,
-  hosts: Array<{ host_id: string; host_name: string }>
+  hosts: Array<{ host_id: string; host_name: string; aliases?: string }>
 ): Promise<void> {
   const ttl = Math.floor(Date.now() / 1000) + 7 * 86400;
   await getClient().send(new PutCommand({
@@ -47,12 +47,12 @@ export async function writeHostList(
 export async function readHostList(
   tenantId: string,
   runId: string
-): Promise<Array<{ host_id: string; host_name: string }>> {
+): Promise<Array<{ host_id: string; host_name: string; aliases?: string }>> {
   const resp = await getClient().send(new GetCommand({
     TableName: "finops_host_lists",
     Key: { tenant_id: tenantId, run_id: runId },
   }));
-  return (resp.Item?.hosts as Array<{ host_id: string; host_name: string }>) ?? [];
+  return (resp.Item?.hosts as Array<{ host_id: string; host_name: string; aliases?: string }>) ?? [];
 }
 
 // ─── Run Progress ─────────────────────────────────────────────────────────────
@@ -85,7 +85,7 @@ export async function updateRunProgress(
       ":empty": [],
     },
   }));
-  // Trim log to last 20
+  // Trim log to last 400
   const resp = await getClient().send(new GetCommand({
     TableName: "finops_runs",
     Key: { run_id: runId, sk: "METADATA" },
@@ -93,13 +93,13 @@ export async function updateRunProgress(
     ExpressionAttributeNames: { "#log": "log" },
   }));
   const log: string[] = (resp.Item?.log as string[]) ?? [];
-  if (log.length > 20) {
+  if (log.length > 400) {
     await getClient().send(new UpdateCommand({
       TableName: "finops_runs",
       Key: { run_id: runId, sk: "METADATA" },
       UpdateExpression: "SET #log = :trimmed",
       ExpressionAttributeNames: { "#log": "log" },
-      ExpressionAttributeValues: { ":trimmed": log.slice(-20) },
+      ExpressionAttributeValues: { ":trimmed": log.slice(-400) },
     }));
   }
 }
@@ -139,14 +139,20 @@ export async function readOrgHostResults(
   tenantId: string,
   runId: string
 ): Promise<Record<string, unknown>[]> {
-  const resp = await getClient().send(new QueryCommand({
-    TableName: "finops_host_results",
-    IndexName: "run_id-index",
-    KeyConditionExpression: "run_id = :r",
-    ExpressionAttributeValues: { ":r": runId },
-  }));
-  const items = (resp.Items ?? []) as Record<string, unknown>[];
-  return items.filter((item) => item["tenant_id"] === tenantId);
+  const allItems: Record<string, unknown>[] = [];
+  let lastKey: Record<string, unknown> | undefined;
+  do {
+    const resp = await getClient().send(new QueryCommand({
+      TableName: "finops_host_results",
+      IndexName: "run_id-index",
+      KeyConditionExpression: "run_id = :r",
+      ExpressionAttributeValues: { ":r": runId },
+      ExclusiveStartKey: lastKey,
+    }));
+    allItems.push(...((resp.Items ?? []) as Record<string, unknown>[]));
+    lastKey = resp.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (lastKey);
+  return allItems.filter((item) => item["tenant_id"] === tenantId);
 }
 
 // ─── Org Summary ──────────────────────────────────────────────────────────────
@@ -230,7 +236,24 @@ export async function getLatestRun(): Promise<Record<string, unknown> | null> {
   )[0];
 }
 
+export async function getActiveRun(): Promise<Record<string, unknown> | null> {
+  const resp = await getClient().send(new ScanCommand({
+    TableName: "finops_runs",
+    FilterExpression: "sk = :sk AND #s = :running",
+    ExpressionAttributeNames: { "#s": "status" },
+    ExpressionAttributeValues: { ":sk": "METADATA", ":running": "running" },
+  }));
+  const items = (resp.Items ?? []) as Record<string, unknown>[];
+  if (!items.length) return null;
+  return items.sort((a, b) =>
+    String(b["started_at"] ?? "").localeCompare(String(a["started_at"] ?? ""))
+  )[0];
+}
+
 export async function getLatestCompletedRun(): Promise<Record<string, unknown> | null> {
+  // Fetch the last 10 completed runs and return the most recent one that
+  // actually processed hosts. This prevents a zero-host "completed" run
+  // (e.g. from a failed DDSQL query) from overwriting a previous good report.
   const resp = await getClient().send(new QueryCommand({
     TableName: "finops_runs",
     IndexName: "status-started_at-index",
@@ -238,10 +261,11 @@ export async function getLatestCompletedRun(): Promise<Record<string, unknown> |
     ExpressionAttributeNames: { "#s": "status" },
     ExpressionAttributeValues: { ":s": "completed" },
     ScanIndexForward: false,
-    Limit: 1,
+    Limit: 10,
   }));
   const items = (resp.Items ?? []) as Record<string, unknown>[];
-  return items[0] ?? null;
+  // Prefer runs with hosts_done > 0; fall back to any completed run if none found
+  return items.find(r => Number(r["hosts_done"] ?? 0) > 0) ?? items[0] ?? null;
 }
 
 export async function getOrgSummariesForRun(runId: string): Promise<Record<string, unknown>[]> {
@@ -255,15 +279,21 @@ export async function getOrgSummariesForRun(runId: string): Promise<Record<strin
 }
 
 export async function getHostResultsForRun(runId: string): Promise<Record<string, unknown>[]> {
-  const resp = await getClient().send(new QueryCommand({
-    TableName: "finops_host_results",
-    IndexName: "run_id-index",
-    KeyConditionExpression: "run_id = :r",
-    ExpressionAttributeValues: { ":r": runId },
-  }));
-  const items = (resp.Items ?? []) as Record<string, unknown>[];
+  const allItems: Record<string, unknown>[] = [];
+  let lastKey: Record<string, unknown> | undefined;
+  do {
+    const resp = await getClient().send(new QueryCommand({
+      TableName: "finops_host_results",
+      IndexName: "run_id-index",
+      KeyConditionExpression: "run_id = :r",
+      ExpressionAttributeValues: { ":r": runId },
+      ExclusiveStartKey: lastKey,
+    }));
+    allItems.push(...((resp.Items ?? []) as Record<string, unknown>[]));
+    lastKey = resp.LastEvaluatedKey as Record<string, unknown> | undefined;
+  } while (lastKey);
   // Split composite SK "host_id#run_id" → expose host_id field
-  return items.map((item) => {
+  return allItems.map((item) => {
     const sk = String(item["sk"] ?? "");
     if (sk.includes("#")) {
       return { ...item, host_id: sk.split("#")[0] };

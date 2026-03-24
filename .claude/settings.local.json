@@ -25,7 +25,24 @@
       "Bash(dir:*)",
       "WebFetch(domain:docs.datadoghq.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:registry.npmjs.org)",
+      "Bash(curl:*)",
+      "Bash(\"C:\\\\Program Files\\\\nodejs\\\\node.exe\" -e \"\nconst apiKey = 'fd296ead14f55dfa8e1fcbc95ecbff02';\nconst appKey = '7bf7c6ee7d99f7454965986584a0722154886a2b';\nconst mcpUrl = 'https://mcp.datadoghq.com/api/unstable/mcp-server/mcp';\n\nasync function run\\(\\) {\n  // Step 1: init session\n  const initResp = await fetch\\(mcpUrl + '?toolsets=core', {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      'Accept': 'application/json, text/event-stream',\n      'DD-API-KEY': apiKey,\n      'DD-APPLICATION-KEY': appKey,\n    },\n    body: JSON.stringify\\({\n      jsonrpc: '2.0', id: 0, method: 'initialize',\n      params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1.0' } }\n    }\\)\n  }\\);\n  console.log\\('Init status:', initResp.status\\);\n  const sessionId = initResp.headers.get\\('mcp-session-id'\\);\n  console.log\\('Session ID:', sessionId\\);\n  if \\(!sessionId\\) { console.log\\('Init body:', await initResp.text\\(\\)\\); return; }\n\n  // Step 2: call search_datadog_hosts\n  const queryResp = await fetch\\(mcpUrl + '?toolsets=core', {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      'Accept': 'application/json, text/event-stream',\n      'DD-API-KEY': apiKey,\n      'DD-APPLICATION-KEY': appKey,\n      'mcp-session-id': sessionId,\n    },\n    body: JSON.stringify\\({\n      jsonrpc: '2.0', id: 1, method: 'tools/call',\n      params: {\n        name: 'search_datadog_hosts',\n        arguments: { query: 'SELECT hostname FROM hosts', start_at: 0, max_tokens: 100000 }\n      }\n    }\\)\n  }\\);\n  console.log\\('Query status:', queryResp.status\\);\n  const body = await queryResp.text\\(\\);\n  console.log\\('Response \\(first 2000 chars\\):', body.slice\\(0, 2000\\)\\);\n}\nrun\\(\\).catch\\(console.error\\);\n\" 2>&1)",
+      "Bash(node_modules/.bin/tsc --noEmit -p packages/agent/tsconfig.json)",
+      "Bash(node:*)",
+      "Bash(find C:Usersmanoj.kamatamDocumentsFinOps_Agentdocs -type f -name *.md)",
+      "Bash(xargs grep:*)",
+      "Bash(grep -r \"aliases\\\\|hostname\\\\|host_name\" C:Usersmanoj.kamatamDocumentsFinOps_Agentpackagesagentsrc --include=*.ts)",
+      "Bash(grep -r \"core.*toolset\\\\|hosts.*metric\\\\|get_datadog_metric\" C:Usersmanoj.kamatamDocumentsFinOps_Agent --include=*.ts --include=*.md)",
+      "Bash(grep -r \"tools/call\\\\|method:\" C:Usersmanoj.kamatamDocumentsFinOps_Agentpackagesagentsrc --include=*.ts)",
+      "Bash(powershell.exe -Command \"Set-Location 'C:\\\\Users\\\\manoj.kamatam\\\\Documents\\\\FinOps_Agent\\\\packages\\\\agent'; & '.\\\\node_modules\\\\.bin\\\\tsc.cmd' --noEmit; Write-Host 'Exit code: '$LASTEXITCODE 2>&1\")",
+      "Bash(node_modules.bintsc.cmd --noEmit)",
+      "Bash(./node_modules/.bin/tsc --noEmit)",
+      "Bash(./node_modules/.bin/tsc)",
+      "Bash(powershell.exe -Command \"Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like ''*finops*'' -or $_.CommandLine -like ''*agent*'' } | Select-Object Id, CPU, StartTime\")",
+      "Bash(powershell.exe -Command \"Set-Location 'C:\\\\Users\\\\manoj.kamatam\\\\Documents\\\\FinOps_Agent\\\\packages\\\\agent'; & '.\\\\node_modules\\\\.bin\\\\tsc.cmd' --noEmit 2>&1\")"
     ]
   }
 }

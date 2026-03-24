@@ -1,11 +1,23 @@
 import React from 'react';
 import { RunStatus } from '../services/api';
 
-interface Props {
-  status: RunStatus;
+function formatElapsed(startedAt: string): string {
+  const ms = Date.now() - new Date(startedAt).getTime();
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return '<1m';
 }
 
-export default function ProgressPanel({ status }: Props) {
+interface Props {
+  status: RunStatus;
+  triggeredBy?: string;
+  startedAt?: string;
+}
+
+export default function ProgressPanel({ status, triggeredBy, startedAt }: Props) {
   const isDiscovering = status.hosts_total === 0;
   const pct = status.progress_pct;
 
@@ -14,7 +26,7 @@ export default function ProgressPanel({ status }: Props) {
       background: 'white', borderRadius: 12, padding: 24,
       boxShadow: '0 1px 3px rgba(0,0,0,0.1)', border: '1px solid #e2e8f0',
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
         <h3 style={{ fontSize: 18, fontWeight: 700, color: '#1e293b' }}>Analysis Progress</h3>
         <span style={{
           padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600,
@@ -24,6 +36,16 @@ export default function ProgressPanel({ status }: Props) {
           {status.status}
         </span>
       </div>
+
+      {/* Started by / elapsed line */}
+      {(triggeredBy || startedAt) && (
+        <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 16 }}>
+          {triggeredBy && <>Started by <span style={{ color: '#64748b', fontWeight: 500 }}>{triggeredBy}</span></>}
+          {startedAt && status.status === 'running' && (
+            <span> · {formatElapsed(startedAt)} elapsed</span>
+          )}
+        </div>
+      )}
 
       {isDiscovering ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>

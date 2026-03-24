@@ -20,6 +20,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, "../.env.local") });  // packages/agent/.env.local
 
+// Each concurrent agent query() adds a process exit listener.
+// With up to 10 batch agents + 2 orgs running in parallel, raise the limit.
+process.setMaxListeners(100);
+
 import express from "express";
 import cors from "cors";
 import { createTables } from "./db/setup.js";

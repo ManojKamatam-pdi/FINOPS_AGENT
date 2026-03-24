@@ -1,0 +1,18 @@
+[
+  {
+    "tenant_id": "PDI-Enterprise",
+    "display_name": "PDI Enterprise",
+    "dd_api_key": "fd296ead14f55dfa8e1fcbc95ecbff02",
+    "dd_app_key": "7bf7c6ee7d99f7454965986584a0722154886a2b",
+    "dd_site": "datadoghq.com",
+    "enabled": true
+  },
+  {
+    "tenant_id": "PDI-Orbis",
+    "display_name": "PDI Orbis",
+    "dd_api_key": "f9e7d19c4687186323e79aaa0620468a",
+    "dd_app_key": "637d46c17bb8e1ddce8ba6eadf65331fc86282ec",
+    "dd_site": "datadoghq.com",
+    "enabled": true
+  }
+]

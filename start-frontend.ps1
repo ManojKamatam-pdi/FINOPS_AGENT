@@ -1,6 +1,5 @@
 # start-frontend.ps1
 # Starts the React frontend for FinOps Agent
-# Fixes the EPERM issue caused by C:\Users\INHYDPDI in PATH
 # Run from repo root in a SEPARATE terminal: .\start-frontend.ps1
 
 Write-Host "PDI FinOps Agent - Frontend Startup" -ForegroundColor Cyan
@@ -8,15 +7,20 @@ Write-Host "=====================================" -ForegroundColor Cyan
 Write-Host ""
 
 # ---------------------------------------------------------------------------
-# Fix PATH: remove inaccessible INHYDPDI NVM entry
+# Fix PATH: strip inaccessible INHYDPDI NVM entries, pin to system Node
 # ---------------------------------------------------------------------------
-$env:PATH = ($env:PATH -split ';' | Where-Object { $_ -notmatch 'INHYDPDI' }) -join ';'
+$env:PATH = ($env:PATH -split ';' | Where-Object { $_ -notmatch 'INHYDPDI' -and $_ -notmatch 'nvm' }) -join ';'
 $env:PATH = "C:\Program Files\nodejs;" + $env:PATH
 
-$npm = "C:\Program Files\nodejs\npm.cmd"
+# Prevent Node from resolving the old user-profile prefix
+$env:npm_config_prefix  = "$env:APPDATA\npm"
+$env:npm_config_cache   = "$env:LOCALAPPDATA\npm-cache"
+$env:NODE_PATH          = "$env:APPDATA\npm\node_modules"
 
-Write-Host "Using Node: $(& 'C:\Program Files\nodejs\node.exe' --version)" -ForegroundColor Green
-Write-Host "Using npm:  $(& $npm --version)" -ForegroundColor Green
+$npm  = "C:\Program Files\nodejs\npm.cmd"
+$node = "C:\Program Files\nodejs\node.exe"
+
+Write-Host "Node: $(& $node --version)   npm: $(& $npm --version)" -ForegroundColor Green
 Write-Host ""
 
 # ---------------------------------------------------------------------------
@@ -56,18 +60,13 @@ if (Test-Path $cacheDir) {
 # ---------------------------------------------------------------------------
 # Install npm dependencies if node_modules is missing
 # ---------------------------------------------------------------------------
-$nodeModules = "$PSScriptRoot\packages\frontend\node_modules"
-if (-not (Test-Path $nodeModules)) {
+$frontendDir = "$PSScriptRoot\packages\frontend"
+if (-not (Test-Path "$frontendDir\node_modules")) {
     Write-Host "Installing npm dependencies..." -ForegroundColor Cyan
-    Push-Location "$PSScriptRoot\packages\frontend"
-    try {
-        & $npm install
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "npm install failed" -ForegroundColor Red
-            exit 1
-        }
-    } finally {
-        Pop-Location
+    & $npm install --prefix $frontendDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "npm install failed" -ForegroundColor Red
+        exit 1
     }
     Write-Host "Dependencies installed" -ForegroundColor Green
 }
@@ -80,7 +79,7 @@ Write-Host "Starting frontend on http://localhost:3000 ..." -ForegroundColor Gre
 Write-Host "Open http://localhost:3000 (NOT the network IP)" -ForegroundColor Yellow
 Write-Host ""
 
-Push-Location "$PSScriptRoot\packages\frontend"
+Push-Location $frontendDir
 try {
     & $npm start
 } finally {

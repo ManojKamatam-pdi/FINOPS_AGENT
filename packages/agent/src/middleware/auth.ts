@@ -18,16 +18,31 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 dotenv.config({ path: join(__dirname, "../../.env.local") });
 
-// Cache JWKS keyed by issuer URL — invalidates automatically if OKTA_ISSUER changes between restarts
+// Always create a fresh JWKS fetcher — no singleton cache.
+// jose internally caches the keyset per instance; by creating a new instance
+// on each call we guarantee a fresh fetch when Okta rotates keys.
+function makeJwks(issuer: string) {
+  return createRemoteJWKSet(new URL(`${issuer}/v1/keys`), {
+    cacheMaxAge: 5 * 60 * 1000, // cache within this instance for 5 min
+    cooldownDuration: 0,
+  });
+}
+
+// Module-level cache: invalidated whenever issuer changes or on JWKSNoMatchingKey
 let _jwksIssuer = "";
 let _jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 
-function getJwks() {
-  const issuer = (process.env.OKTA_ISSUER ?? "").replace(/\/$/, "");
+function getJwks(issuer: string) {
   if (!_jwks || _jwksIssuer !== issuer) {
     _jwksIssuer = issuer;
-    _jwks = createRemoteJWKSet(new URL(`${issuer}/v1/keys`));
+    _jwks = makeJwks(issuer);
   }
+  return _jwks;
+}
+
+function resetJwks(issuer: string) {
+  _jwksIssuer = issuer;
+  _jwks = makeJwks(issuer);
   return _jwks;
 }
 
@@ -52,16 +67,28 @@ export async function requireAuth(
   }
   const token = authHeader.slice(7).trim();
 
-  // Read at call time (not module load time) to ensure dotenv has run
   const issuer = (process.env.OKTA_ISSUER ?? "").replace(/\/$/, "");
   const clientId = process.env.OKTA_CLIENT_ID ?? "";
 
+  const verify = async (jwks: ReturnType<typeof createRemoteJWKSet>) =>
+    jwtVerify(token, jwks, { issuer });
+
   try {
-    const { payload } = await jwtVerify(token, getJwks(), {
-      issuer,
-      // audience intentionally omitted — Okta org-level access tokens vary in aud claim
-      // (may be issuer URL, "api://default", or custom). We validate issuer + cid instead.
-    });
+    let payload: Record<string, unknown>;
+
+    try {
+      const result = await verify(getJwks(issuer));
+      payload = result.payload as Record<string, unknown>;
+    } catch (firstErr) {
+      // On JWKSNoMatchingKey, Okta has rotated keys — force a fresh fetch and retry once
+      if (String(firstErr).includes("JWKSNoMatchingKey")) {
+        console.warn("[auth] JWKSNoMatchingKey — refreshing JWKS and retrying");
+        const result = await verify(resetJwks(issuer));
+        payload = result.payload as Record<string, unknown>;
+      } else {
+        throw firstErr;
+      }
+    }
 
     if (payload["cid"] !== clientId) {
       res.status(401).json({ error: "Token client ID mismatch" });
@@ -72,7 +99,7 @@ export async function requireAuth(
       email: String(payload["email"] ?? payload["sub"] ?? ""),
       sub: String(payload["sub"] ?? ""),
       rawToken: token,
-      claims: payload as Record<string, unknown>,
+      claims: payload,
     };
     next();
   } catch (err) {

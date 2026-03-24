@@ -1,67 +1,55 @@
 /**
- * Central MCP registry — reads from MCP_REGISTRY env var (JSON array).
- * Each entry: { name, url, transport, auth }
- * auth modes: "okta_forward" | "none" | "env:MY_VAR"
+ * Builds per-org Datadog MCP servers (HTTP) from dd-org-registry.json.
+ * Uses the official Datadog MCP Server at mcp.datadoghq.com with API key
+ * authentication via headers — no OAuth, no stdio binary needed.
+ * The agent discovers tools at runtime — no hardcoded tool names needed.
  */
+import { getTenants } from "./tenants.js";
 
-interface RegistryEntry {
-  name: string;
+interface HttpMcpServer {
+  type: "http";
   url: string;
-  transport?: string;
-  auth?: string;
+  headers: Record<string, string>;
 }
 
-interface McpServerConfig {
-  type: string;
-  url: string;
-  headers?: Record<string, string>;
-}
+const DD_MCP_BASE: Record<string, string> = {
+  "datadoghq.com": "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp",
+  "datadoghq.eu": "https://mcp.datadoghq.eu/api/unstable/mcp-server/mcp",
+  "us3.datadoghq.com": "https://mcp.us3.datadoghq.com/api/unstable/mcp-server/mcp",
+  "us5.datadoghq.com": "https://mcp.us5.datadoghq.com/api/unstable/mcp-server/mcp",
+  "ap1.datadoghq.com": "https://mcp.ap1.datadoghq.com/api/unstable/mcp-server/mcp",
+};
 
-function loadRegistry(): RegistryEntry[] {
-  const raw = process.env.MCP_REGISTRY ?? "";
-  if (!raw) {
-    const legacyUrl = process.env.DATADOG_MCP_URL ?? "";
-    if (legacyUrl) return [{ name: "datadog", url: legacyUrl, transport: "http", auth: "okta_forward" }];
-    return [];
-  }
-  try {
-    const entries = JSON.parse(raw);
-    if (!Array.isArray(entries)) throw new Error("MCP_REGISTRY must be a JSON array");
-    return entries as RegistryEntry[];
-  } catch (e) {
-    console.error("[mcp_registry] Failed to parse MCP_REGISTRY:", e);
-    const legacyUrl = process.env.DATADOG_MCP_URL ?? "";
-    return legacyUrl ? [{ name: "datadog", url: legacyUrl, transport: "http", auth: "okta_forward" }] : [];
-  }
-}
+/**
+ * Returns one HTTP Datadog MCP server per enabled org.
+ * Server name = tenant_id (e.g. "PDI-Enterprise")
+ * Tools visible to agent: mcp__PDI-Enterprise__<tool_name>
+ *
+ * Uses the "core" toolset which includes: hosts, metrics, logs, monitors,
+ * dashboards, incidents, services, events, notebooks, traces, spans, RUM.
+ */
+export function getDatadogMcpServers(): Record<string, HttpMcpServer> {
+  const tenants = getTenants();
+  const servers: Record<string, HttpMcpServer> = {};
 
-export function getMcpServers(
-  names: string[],
-  oktaToken = ""
-): Record<string, McpServerConfig> {
-  const registry = loadRegistry();
-  const byName = Object.fromEntries(registry.map((e) => [e.name, e]));
-  const result: Record<string, McpServerConfig> = {};
-
-  for (const name of names) {
-    const entry = byName[name];
-    if (!entry) {
-      console.warn(`[mcp_registry] MCP '${name}' not found in registry — skipping`);
+  for (const tenant of tenants) {
+    if (!tenant.dd_api_key || tenant.dd_api_key === "REPLACE_ME") {
+      console.warn(`[mcp_registry] Skipping '${tenant.tenant_id}' — dd_api_key not configured`);
       continue;
     }
-    const server: McpServerConfig = { type: entry.transport ?? "http", url: entry.url };
-    const auth = entry.auth ?? "none";
 
-    if (auth === "okta_forward") {
-      if (oktaToken) server.headers = { Authorization: `Bearer ${oktaToken}` };
-    } else if (auth.startsWith("env:")) {
-      const varName = auth.slice(4);
-      const apiKey = process.env[varName] ?? "";
-      if (apiKey) server.headers = { Authorization: `Bearer ${apiKey}` };
-      else console.warn(`[mcp_registry] MCP '${name}' auth env var '${varName}' not set`);
-    }
+    const site = tenant.dd_site ?? "datadoghq.com";
+    const baseUrl = DD_MCP_BASE[site] ?? DD_MCP_BASE["datadoghq.com"];
 
-    result[name] = server;
+    servers[tenant.tenant_id] = {
+      type: "http",
+      url: `${baseUrl}?toolsets=core`,
+      headers: {
+        DD_API_KEY: tenant.dd_api_key,
+        DD_APPLICATION_KEY: tenant.dd_app_key,
+      },
+    };
   }
-  return result;
+
+  return servers;
 }

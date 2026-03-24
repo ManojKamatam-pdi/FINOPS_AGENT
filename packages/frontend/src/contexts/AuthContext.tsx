@@ -21,18 +21,14 @@ const AuthContext = createContext<AuthContextValue>({
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const { oktaAuth, authState } = useOktaAuth();
-  const [token, setToken] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
   useEffect(() => {
     if (authState?.isAuthenticated) {
-      const accessToken = oktaAuth.getAccessToken();
-      setToken(accessToken || null);
       oktaAuth.getUser().then((user) => {
         setUserEmail(user.email || user.sub || null);
       }).catch(() => {});
     } else {
-      setToken(null);
       setUserEmail(null);
     }
   }, [authState, oktaAuth]);
@@ -42,6 +38,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     oktaAuth.tokenManager.clear();
     window.location.href = '/login';
   };
+
+  // Read fresh from tokenManager on every render — Okta silently renews the token
+  // in the background without triggering an authState change, so caching it in state
+  // would return a stale expired token after ~1 hour.
+  const token = authState?.isAuthenticated ? (oktaAuth.getAccessToken() ?? null) : null;
 
   return (
     <AuthContext.Provider value={{

@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 /**
  * Results & Host Table Tests
- * Covers: org summary cards, host table sorting/filtering/expansion
+ * Covers: org summary cards, host table sorting/filtering/expansion, host detail row sections
  * These tests only run if a completed analysis run exists.
  */
 test.describe('Results Display', () => {
@@ -12,7 +12,7 @@ test.describe('Results Display', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await page.waitForURL(/localhost:3000\/?$/, { timeout: 30000 });
-    await expect(page.getByText('Infrastructure Analysis')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole('heading', { name: 'Infrastructure Analysis' })).toBeVisible({ timeout: 15000 });
     const tokenStorage = await page.evaluate(() => localStorage.getItem('okta-token-storage'));
     const tokens = JSON.parse(tokenStorage!);
     accessToken = tokens.accessToken?.accessToken;
@@ -21,9 +21,7 @@ test.describe('Results Display', () => {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     hasResults = resp.status() === 200;
-    if (!hasResults) {
-      console.log('No completed results yet — skipping results tests');
-    }
+    if (!hasResults) console.log('No completed results yet — results tests will be skipped');
   });
 
   test('GET /api/results returns valid structure when available', async ({ page }) => {
@@ -44,38 +42,77 @@ test.describe('Results Display', () => {
 
   test('org summary cards render when results exist', async ({ page }) => {
     if (!hasResults) return;
-    await expect(page.getByText(/Monthly Spend|Total Hosts|Potential Savings/i)).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('Total Hosts').first()).toBeVisible({ timeout: 10000 });
   });
 
   test('host table renders with column headers when results exist', async ({ page }) => {
     if (!hasResults) return;
-    await expect(page.getByText(/Host/i)).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText(/Instance/i)).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText(/CPU/i)).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText(/Savings/i)).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('heading', { name: /Host Details/i })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('columnheader', { name: /Host/i }).first()).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('columnheader', { name: /CPU/i })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('columnheader', { name: /Savings/i })).toBeVisible({ timeout: 10000 });
   });
 
   test('host table search filter works', async ({ page }) => {
     if (!hasResults) return;
-    const searchInput = page.getByPlaceholder(/search/i);
+    const searchInput = page.getByPlaceholder(/Search by host name/i);
     await expect(searchInput).toBeVisible({ timeout: 10000 });
     await searchInput.fill('zzz-no-match-xyz');
-    await expect(page.getByText(/No hosts match/i)).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('No hosts match the current filters.')).toBeVisible({ timeout: 5000 });
     await searchInput.clear();
   });
 
-  test('host table row expands on click', async ({ page }) => {
+  test('host detail row shows utilisation sections on expand', async ({ page }) => {
     if (!hasResults) return;
-    // Click the first data row in the table
     const rows = page.locator('table tbody tr');
     const count = await rows.count();
-    if (count === 0) {
-      console.log('No host rows to click');
+    if (count === 0) { console.log('No host rows to click'); return; }
+
+    await rows.first().click();
+
+    // HostDetailRow now has labelled sections
+    await expect(page.getByText('30-Day Utilisation').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Instance Info').first()).toBeVisible({ timeout: 5000 });
+
+    // Efficiency label is always present
+    await expect(
+      page.getByText(/over-provisioned|right-sized|under-provisioned|unknown/i).first()
+    ).toBeVisible({ timeout: 5000 });
+
+    console.log('Host detail row expanded and shows utilisation sections ✓');
+  });
+
+  test('host detail row shows right-sizing section when savings data exists', async ({ page }) => {
+    if (!hasResults) return;
+
+    // Get results to find a host with savings
+    const resp = await page.request.get('http://localhost:8005/api/results', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const data = await resp.json();
+    const hostWithSavings = data.host_results.find((h: any) => (h.monthly_savings ?? 0) > 0);
+    if (!hostWithSavings) {
+      console.log('No host with savings > 0 — skipping right-sizing section test');
       return;
     }
+
+    // Search for this specific host
+    const searchInput = page.getByPlaceholder(/Search by host name/i);
+    await expect(searchInput).toBeVisible({ timeout: 10000 });
+    await searchInput.fill(hostWithSavings.host_name.slice(0, 20));
+    await page.waitForTimeout(300);
+
+    const rows = page.locator('table tbody tr');
+    const count = await rows.count();
+    if (count === 0) { console.log('Host not found in table'); return; }
+
     await rows.first().click();
-    // Expanded row shows efficiency label or recommendation
-    await expect(page.getByText(/over-provisioned|right-sized|under-provisioned|Recommendation/i)).toBeVisible({ timeout: 5000 });
+
+    // Right-Sizing section should appear
+    await expect(page.getByText('Right-Sizing').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Monthly savings').first()).toBeVisible({ timeout: 5000 });
+
+    console.log(`Right-sizing section visible for ${hostWithSavings.host_name} ✓`);
   });
 
   test('host table sort by CPU changes row order', async ({ page }) => {
@@ -83,21 +120,20 @@ test.describe('Results Display', () => {
     const cpuHeader = page.getByRole('columnheader', { name: /CPU/i });
     if (!(await cpuHeader.isVisible())) return;
     await cpuHeader.click();
-    // After click, sort indicator should appear
-    await expect(page.getByText(/↑|↓/)).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('thead').getByText(/↑|↓/)).toBeVisible({ timeout: 3000 });
   });
 
-  test('org summary card shows savings percentage badge when savings > 0', async ({ page }) => {
+  test('org summary card shows savings badge when savings > 0', async ({ page }) => {
     if (!hasResults) return;
     const resp = await page.request.get('http://localhost:8005/api/results', {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const data = await resp.json();
-    const orgWithSavings = data.org_summaries.find((o: any) => o.savings_percent > 0);
+    const orgWithSavings = data.org_summaries.find((o: any) => (o.savings_percent ?? 0) > 0);
     if (!orgWithSavings) {
       console.log('No org with savings > 0 — skipping badge test');
       return;
     }
-    await expect(page.getByText(/%\s*savings opportunity/i)).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(/savings opportunity/i).first()).toBeVisible({ timeout: 10000 });
   });
 });

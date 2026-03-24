@@ -15,6 +15,25 @@ export interface RunStatus {
   log: string[];
 }
 
+export interface ActiveRunInfo {
+  run_id: string;
+  status: 'running';
+  triggered_by: string;
+  started_at: string;
+  progress_pct: number;
+  hosts_done: number;
+  hosts_total: number;
+}
+
+export interface ConflictInfo {
+  run_id: string;
+  triggered_by: string;
+  started_at: string;
+  progress_pct: number;
+  hosts_done: number;
+  hosts_total: number;
+}
+
 export interface OrgSummary {
   tenant_id: string;
   total_hosts: number;
@@ -40,6 +59,7 @@ export interface HostResult {
   cpu_avg_30d: number | null;
   cpu_p95_30d: number | null;
   ram_avg_30d: number | null;
+  disk_avg_30d: number | null;
   network_in_avg_30d: number | null;
   network_out_avg_30d: number | null;
   instance_type: string | null;
@@ -79,7 +99,15 @@ export async function triggerRun(token: string): Promise<{ run_id: string; statu
   });
   if (resp.status === 409) {
     const data = await resp.json();
-    throw Object.assign(new Error('already_running'), { run_id: data.run_id });
+    const conflict: ConflictInfo = {
+      run_id: data.run_id,
+      triggered_by: data.triggered_by,
+      started_at: data.started_at,
+      progress_pct: data.progress_pct,
+      hosts_done: data.hosts_done,
+      hosts_total: data.hosts_total,
+    };
+    throw Object.assign(new Error('already_running'), { conflict });
   }
   if (!resp.ok) throw new Error(`Trigger failed: ${resp.status}`);
   return resp.json();
@@ -98,4 +126,20 @@ export async function getResults(token: string, runId?: string): Promise<Results
   if (resp.status === 404) throw Object.assign(new Error('no_results'), { status: 404 });
   if (!resp.ok) throw new Error(`Results fetch failed: ${resp.status}`);
   return resp.json();
+}
+
+export async function getActiveRun(token: string): Promise<ActiveRunInfo | null> {
+  const resp = await fetch(`${API_URL}/api/active-run`, { headers: authHeader(token) });
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw new Error(`Active run fetch failed: ${resp.status}`);
+  return resp.json();
+}
+
+export async function abortRun(token: string, runId: string): Promise<void> {
+  const resp = await fetch(`${API_URL}/api/abort`, {
+    method: 'POST',
+    headers: authHeader(token),
+    body: JSON.stringify({ run_id: runId }),
+  });
+  if (!resp.ok) throw new Error(`Abort failed: ${resp.status}`);
 }

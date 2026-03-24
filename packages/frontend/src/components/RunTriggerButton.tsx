@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { triggerRun } from '../services/api';
+import { triggerRun, ConflictInfo } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 
 interface Props {
   onRunStarted: (runId: string) => void;
-  onAlreadyRunning: (runId: string) => void;
+  onAlreadyRunning: (conflict: ConflictInfo) => void;
 }
 
 export default function RunTriggerButton({ onRunStarted, onAlreadyRunning }: Props) {
@@ -23,7 +23,7 @@ export default function RunTriggerButton({ onRunStarted, onAlreadyRunning }: Pro
       onRunStarted(result.run_id);
     } catch (err: any) {
       if (err.message === 'already_running') {
-        onAlreadyRunning(err.run_id);
+        onAlreadyRunning(err.conflict);
       }
     } finally {
       setLoading(false);
