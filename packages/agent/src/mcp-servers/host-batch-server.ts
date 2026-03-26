@@ -3,6 +3,7 @@ import { z } from "zod";
 import { writeHostResult, updateRunProgress } from "../tools/dynamodb.js";
 import { getInstanceSpecs, suggestRightSizedInstance, getAllInstancesSortedByPrice, CANDIDATE_FAMILIES_V1 } from "../tools/aws-instances.js";
 import { getPricesForInstances, getInstanceOnDemandPrice } from "../tools/aws-pricing.js";
+import { getHostMetricsFromCache } from "../tools/metric-cache.js";
 
 export function createHostBatchServer(
   tenantId: string,
@@ -15,6 +16,20 @@ export function createHostBatchServer(
     name: "host-batch-tools",
     version: "1.0.0",
     tools: [
+      tool(
+        "get_prefetched_metrics_tool",
+        "Look up pre-fetched org-wide metric data for a single host. Call this FIRST before any get_datadog_metric calls — it returns all available T1 and T2 metrics from the bulk pre-fetch. Every host in this batch is guaranteed to be in the cache (the pre-fetch used explicit host-scoped queries covering the full host list). If a metric value is null it means that metric had no data for this host in Datadog (e.g. no agent installed, integration not active) — not a cache miss.",
+        { host_name: z.string() },
+        async ({ host_name }) => {
+          const metrics = await getHostMetricsFromCache(tenantId, runId, host_name);
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify({ host_name, metrics }),
+            }],
+          };
+        }
+      ),
       tool(
         "get_instance_specs_tool",
         "Get CPU count (vcpu) and RAM GB for an EC2 instance type from the live AWS catalog. Returns { vcpu, ram_gb, instance_type }.",
@@ -41,9 +56,9 @@ export function createHostBatchServer(
       ),
       tool(
         "suggest_right_sized_instance_tool",
-        "Use this tool when instance_type IS known AND it is an AWS EC2 type (e.g. t2.medium, m5a.large, c5.xlarge, r5.2xlarge). ALWAYS call this instead of suggest_universal_rightsizing_tool when you have an AWS instance_type. Returns the best-fit replacement instance with live pricing, monthly savings, and current cost. cpu_p95_pct: 95th percentile CPU % (0-100). ram_avg_pct: average RAM used as % of current instance total RAM (0-100). Pass null if RAM data is unavailable — the tool will return ram_unavailable=true signaling you to use PATH 2: call suggest_universal_rightsizing_tool with ram_avg_pct=null instead. NOTE: If the instance_type is Azure (e.g. Standard_D2s_v3) or GCP (e.g. n2-standard-4), this tool will return catalog_not_available=true — in that case use suggest_universal_rightsizing_tool instead.",
+        "Use this tool when instance_type IS known AND it is an AWS EC2 type (e.g. t2.medium, m5a.large, c5.xlarge, r5.2xlarge). ALWAYS call this instead of suggest_universal_rightsizing_tool when you have an AWS instance_type. Returns the best-fit replacement instance with live pricing, monthly savings, and current cost. cpu_p95_pct: 95th percentile CPU % (0-100) — pass null if no CPU data available. ram_avg_pct: average RAM used as % of current instance total RAM (0-100) — pass null if RAM data is unavailable. If both are null (PATH 3 — no metrics), the tool returns catalog_not_available or current_monthly_usd so you can populate current_monthly_cost. NOTE: If the instance_type is Azure (e.g. Standard_D2s_v3) or GCP (e.g. n2-standard-4), this tool will return catalog_not_available=true — in that case use suggest_universal_rightsizing_tool instead.",
         {
-          cpu_p95_pct: z.number(),
+          cpu_p95_pct: z.number().nullable(),
           ram_avg_pct: z.number().nullable(),
           current_instance: z.string(),
           region: z.string().default("us-east-1"),
@@ -66,7 +81,21 @@ export function createHostBatchServer(
             };
           }
 
-          // If RAM data is unavailable, signal the agent to use PATH 2 (universal rightsizing)
+          // PATH 3: both cpu and ram are null — no metrics at all, just return current price
+          if (cpu_p95_pct === null && ram_avg_pct === null) {
+            return {
+              content: [{
+                type: "text" as const,
+                text: JSON.stringify({
+                  no_metrics: true,
+                  message: "No utilization metrics available — PATH 3: use get_instance_on_demand_price_tool for current_monthly_cost and write PATH 3 recommendation",
+                  current_monthly_usd: currentPrice,
+                }),
+              }],
+            };
+          }
+
+          // If RAM data is unavailable but CPU is present, signal PATH 2 (universal rightsizing)
           if (ram_avg_pct === null) {
             return {
               content: [{
@@ -80,7 +109,7 @@ export function createHostBatchServer(
             };
           }
 
-          const result = await suggestRightSizedInstance(cpu_p95_pct, ram_avg_pct, current_instance, prices, region);
+          const result = await suggestRightSizedInstance(cpu_p95_pct!, ram_avg_pct, current_instance, prices, region);
           const suggestedPrice = prices[result.suggested] ?? null;
           let monthlySavings = 0;
           let savingsPct = 0;
@@ -130,14 +159,14 @@ export function createHostBatchServer(
           cpu_p95_pct: z.number().nullable(),
           ram_avg_pct: z.number().nullable(),
           disk_avg_pct: z.number().nullable(),
-          network_in_bytes_day: z.number().nullable(),
-          network_out_bytes_day: z.number().nullable(),
+          network_in_avg_30d: z.number().nullable(),
+          network_out_avg_30d: z.number().nullable(),
           instance_cpu_count: z.number().nullable(),
           instance_ram_gb: z.number().nullable(),
           cloud_provider: z.string().default("unknown"),
         },
         async ({ host_name, cpu_avg_pct, cpu_p95_pct, ram_avg_pct, disk_avg_pct,
-                  network_in_bytes_day, network_out_bytes_day,
+                  network_in_avg_30d, network_out_avg_30d,
                   instance_cpu_count, instance_ram_gb, cloud_provider }) => {
 
           // p95 is primary for right-sizing labeling; avg is fallback
@@ -174,11 +203,11 @@ export function createHostBatchServer(
             // Use p95 for sizing math — don't size below peak
             const cpuForSizing = cpu_p95_pct ?? cpu_avg_pct;
             if (cpuForSizing !== null && cpuForSizing < 20 && instance_cpu_count && instance_cpu_count > 1) {
-              const suggestedCpu = Math.max(2, Math.ceil(instance_cpu_count * (cpuForSizing / 100) * 2));
-              suggestions.push(`reduce vCPUs from ${instance_cpu_count} to ~${suggestedCpu} (based on 30-day p95 with 2× headroom)`);
+              const suggestedCpu = Math.max(2, Math.ceil(instance_cpu_count * (cpuForSizing / 100) * 1.5));
+              suggestions.push(`reduce vCPUs from ${instance_cpu_count} to ~${suggestedCpu} (based on 30-day p95 with 1.5× headroom)`);
             }
             if (ram !== null && ram < 40 && instance_ram_gb && instance_ram_gb > 1) {
-              const suggestedRam = Math.max(1, Math.ceil(instance_ram_gb * (ram / 100) * 2));
+              const suggestedRam = Math.max(1, Math.ceil(instance_ram_gb * (ram / 100) * 1.5));
               suggestions.push(`reduce RAM from ${instance_ram_gb.toFixed(0)} GB to ~${suggestedRam} GB`);
             }
             if (suggestions.length > 0) {
@@ -204,10 +233,10 @@ export function createHostBatchServer(
           // Suggested resource targets — use p95 for sizing math
           const cpuForSizing = cpu_p95_pct ?? cpu_avg_pct;
           const suggestedCpuCount = (cpuForSizing !== null && instance_cpu_count && label === "over-provisioned")
-            ? Math.max(2, Math.ceil(instance_cpu_count * (cpuForSizing / 100) * 2))
+            ? Math.max(2, Math.ceil(instance_cpu_count * (cpuForSizing / 100) * 1.5))
             : null;
           const suggestedRamGb = (ram !== null && instance_ram_gb && label === "over-provisioned")
-            ? Math.max(1, Math.ceil(instance_ram_gb * (ram / 100) * 2))
+            ? Math.max(1, Math.ceil(instance_ram_gb * (ram / 100) * 1.5))
             : null;
 
           return {
@@ -294,10 +323,17 @@ export function createHostBatchServer(
             efficiency_label = "unknown";
           }
 
-          // Efficiency score — use cpu_avg for reporting (avg reflects sustained load)
+          // Efficiency score — use cpu_avg for reporting (avg reflects sustained load).
+          // Compute from both cpu+ram when available; fall back to cpu alone when ram is null
+          // (common for AWS CloudWatch, Azure/GCP without agent). Never null when cpu is available.
           let efficiency_score = n("efficiency_score") as number | null;
-          if (efficiency_score === null && cpu_for_score !== null && ram_avg_final !== null) {
-            efficiency_score = Math.min(100, Math.max(0, Math.round((cpu_for_score + ram_avg_final) / 2)));
+          if (efficiency_score === null) {
+            if (cpu_for_score !== null && ram_avg_final !== null) {
+              efficiency_score = Math.min(100, Math.max(0, Math.round((cpu_for_score + ram_avg_final) / 2)));
+            } else if (cpu_for_score !== null) {
+              // RAM unavailable — score from CPU alone (clearly noted in recommendation)
+              efficiency_score = Math.min(100, Math.max(0, Math.round(cpu_for_score)));
+            }
           }
 
           // Instance type — authoritative source is Datadog metadata (dd_host_metadata).
@@ -367,10 +403,10 @@ export function createHostBatchServer(
               ? Math.max(0, Math.round((monthly_savings / current_monthly_cost) * 1000) / 10)
               : null;
 
-          // Recommendation — reject single-word keywords, require a proper sentence
+          // Recommendation — reject keyword-only responses, require a proper sentence (≥10 words)
           let recommendation = n("recommendation") as string | null;
-          if (recommendation && recommendation.trim().split(/\s+/).length < 5) {
-            // Agent wrote a keyword like "DOWNSIZE" — discard it
+          if (recommendation && recommendation.trim().split(/\s+/).length < 10) {
+            // Agent wrote a keyword like "DOWNSIZE" or a stub like "No data found." — discard it
             recommendation = null;
           }
 
@@ -404,6 +440,7 @@ export function createHostBatchServer(
           const canonical: Record<string, unknown> = {
             host_name:              n("host_name", "hostname") ?? host_id,
             cloud_provider,
+            host_subtype:           n("host_subtype") ?? null,
             cpu_avg_30d:            cpu_avg_final,
             cpu_p95_30d:            cpu_p95_final,
             ram_avg_30d:            ram_avg_final,

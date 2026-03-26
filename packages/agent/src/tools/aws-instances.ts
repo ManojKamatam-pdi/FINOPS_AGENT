@@ -122,8 +122,8 @@ export async function suggestRightSizedInstance(
   const currentSpecs = specs[currentInstance];
   if (!currentSpecs) return { suggested: currentInstance, already_right_sized: true };
 
-  const requiredVcpu = (cpuP95Pct / 100) * currentSpecs.vcpu * 1.3;
-  const requiredRamGb = (ramAvgPct / 100) * currentSpecs.ram_gb * 1.3;
+  const requiredVcpu = (cpuP95Pct / 100) * currentSpecs.vcpu * 1.5;
+  const requiredRamGb = (ramAvgPct / 100) * currentSpecs.ram_gb * 1.5;
 
   const candidates = await getAllInstancesSortedByPrice(CANDIDATE_FAMILIES_V1, prices, region);
 
