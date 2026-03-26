@@ -17,6 +17,7 @@ interface UtilFilters {
   netMax: number | null;    // show hosts with avg network in+out ≤ X MB/day
   diskMax: number | null;   // show hosts using ≤ X% of provisioned disk
   labelFilter: string;
+  envFilter: string;        // composite "provider:subtype" — "" means no filter
 }
 
 const DEFAULT_FILTERS: UtilFilters = {
@@ -25,6 +26,7 @@ const DEFAULT_FILTERS: UtilFilters = {
   netMax: null,
   diskMax: null,
   labelFilter: '',
+  envFilter: '',
 };
 
 export default function HostTable({ hosts }: Props) {
@@ -45,6 +47,7 @@ export default function HostTable({ hosts }: Props) {
     filters.netMax !== null,
     filters.diskMax !== null,
     !!filters.labelFilter,
+    !!filters.envFilter,
   ].filter(Boolean).length;
 
   const draftDirty = JSON.stringify(draft) !== JSON.stringify(filters);
@@ -104,6 +107,23 @@ export default function HostTable({ hosts }: Props) {
 
       // label
       if (filters.labelFilter && h.efficiency_label !== filters.labelFilter) return false;
+
+      // Hosted env filter — composite "provider:subtype" encoding
+      // "aws:ec2" = aws + ec2 subtype; "aws:" = aws + null/other subtype; "azure:" = any azure
+      if (filters.envFilter) {
+        const colonIdx = filters.envFilter.indexOf(':');
+        const filterProvider = filters.envFilter.slice(0, colonIdx);
+        const filterSubtype = filters.envFilter.slice(colonIdx + 1); // "" means "other/null"
+        if (h.cloud_provider !== filterProvider) return false;
+        if (filterSubtype !== '') {
+          // Specific subtype — must match exactly
+          if ((h.host_subtype ?? '') !== filterSubtype) return false;
+        } else if (filterProvider === 'aws') {
+          // "aws:" means aws with no specific named subtype (null or unrecognized)
+          const namedSubtypes = ['ec2', 'ecs', 'fargate', 'kubernetes_node'];
+          if (namedSubtypes.includes(h.host_subtype ?? '')) return false;
+        }
+      }
 
       return true;
     });
