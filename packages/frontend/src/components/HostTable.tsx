@@ -291,6 +291,31 @@ export default function HostTable({ hosts }: Props) {
               </select>
             </div>
 
+            <div>
+              <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6, fontWeight: 600 }}>
+                HOSTED ENV
+              </div>
+              <select
+                value={draft.envFilter}
+                onChange={e => setDraftFilter('envFilter', e.target.value)}
+                style={{
+                  padding: '6px 10px', border: '1px solid #e2e8f0', borderRadius: 6,
+                  fontSize: 13, background: 'white', color: '#1e293b', cursor: 'pointer',
+                }}
+              >
+                <option value="">All environments</option>
+                <option value="aws:ec2">AWS EC2</option>
+                <option value="aws:ecs">AWS ECS</option>
+                <option value="aws:fargate">AWS Fargate</option>
+                <option value="aws:kubernetes_node">AWS (EKS node)</option>
+                <option value="aws:">AWS (other)</option>
+                <option value="azure:">Azure</option>
+                <option value="gcp:">GCP</option>
+                <option value="on-prem:">On-Prem / VMware</option>
+                <option value="unknown:">Unknown</option>
+              </select>
+            </div>
+
           </div>
 
           {/* Apply row */}
@@ -319,6 +344,7 @@ export default function HostTable({ hosts }: Props) {
             <tr>
               <th style={thStyle} onClick={() => toggleSort('host_name')}>Host {sortKey === 'host_name' ? (sortDir === 'asc' ? '↑' : '↓') : ''}</th>
               <th style={thStyle}>Org</th>
+              <th style={thStyle}>Env</th>
               <th style={thStyle} onClick={() => toggleSort('instance_type')}>Instance {sortKey === 'instance_type' ? (sortDir === 'asc' ? '↑' : '↓') : ''}</th>
               <th style={thStyle} onClick={() => toggleSort('cpu_avg_30d')}>CPU avg {sortKey === 'cpu_avg_30d' ? (sortDir === 'asc' ? '↑' : '↓') : ''}</th>
               <th style={thStyle} onClick={() => toggleSort('ram_avg_30d')}>RAM avg {sortKey === 'ram_avg_30d' ? (sortDir === 'asc' ? '↑' : '↓') : ''}</th>
@@ -340,6 +366,9 @@ export default function HostTable({ hosts }: Props) {
                     <span style={{ color: '#94a3b8', fontSize: 11, marginLeft: 4 }}>{host.host_id}</span>
                   </td>
                   <td style={{ ...tdStyle, color: '#64748b' }}>{host.tenant_id}</td>
+                  <td style={tdStyle}>
+                    <EnvBadge provider={host.cloud_provider} subtype={host.host_subtype ?? null} />
+                  </td>
                   <td style={tdStyle}>{host.instance_type || <span style={{ color: '#94a3b8' }}>—</span>}</td>
                   <td style={tdStyle}>{host.cpu_avg_30d != null ? `${host.cpu_avg_30d.toFixed(1)}%` : '—'}</td>
                   <td style={tdStyle}>{host.ram_avg_30d != null ? `${host.ram_avg_30d.toFixed(1)}%` : '—'}</td>
@@ -371,7 +400,7 @@ export default function HostTable({ hosts }: Props) {
             ))}
             {pageSlice.length === 0 && (
               <tr>
-                <td colSpan={9} style={{ ...tdStyle, textAlign: 'center', color: '#94a3b8', padding: 32 }}>
+                <td colSpan={10} style={{ ...tdStyle, textAlign: 'center', color: '#94a3b8', padding: 32 }}>
                   No hosts match the current filters.
                 </td>
               </tr>
@@ -468,4 +497,49 @@ function pageBtn(disabled: boolean, active = false): React.CSSProperties {
     color: active ? 'white' : disabled ? '#cbd5e1' : '#1e293b',
     fontWeight: active ? 700 : 400,
   };
+}
+
+function envLabel(provider: string, subtype: string | null): string {
+  if (provider === 'aws') {
+    if (subtype === 'ec2') return 'AWS EC2';
+    if (subtype === 'ecs') return 'AWS ECS';
+    if (subtype === 'fargate') return 'Fargate';
+    if (subtype === 'kubernetes_node') return 'AWS EKS';
+    return 'AWS';
+  }
+  if (provider === 'azure') {
+    if (subtype === 'kubernetes_node') return 'Azure AKS';
+    return 'Azure';
+  }
+  if (provider === 'gcp') {
+    if (subtype === 'kubernetes_node') return 'GCP GKE';
+    return 'GCP';
+  }
+  if (provider === 'on-prem') {
+    if (subtype === 'vmware') return 'VMware';
+    return 'On-Prem';
+  }
+  return 'Unknown';
+}
+
+function envStyle(provider: string): { bg: string; color: string; icon: string } {
+  if (provider === 'aws')     return { bg: '#fff7ed', color: '#c2410c', icon: '☁' };
+  if (provider === 'azure')   return { bg: '#eff6ff', color: '#1d4ed8', icon: '☁' };
+  if (provider === 'gcp')     return { bg: '#f0fdf4', color: '#15803d', icon: '☁' };
+  if (provider === 'on-prem') return { bg: '#f5f3ff', color: '#6d28d9', icon: '🖥' };
+  return { bg: '#f8fafc', color: '#64748b', icon: '?' };
+}
+
+function EnvBadge({ provider, subtype }: { provider: string; subtype: string | null }) {
+  const label = envLabel(provider, subtype);
+  const { bg, color, icon } = envStyle(provider);
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600,
+      background: bg, color,
+    }}>
+      {icon} {label}
+    </span>
+  );
 }
