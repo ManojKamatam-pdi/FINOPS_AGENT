@@ -32,13 +32,31 @@ export function createHostBatchServer(
       ),
       tool(
         "get_instance_specs_tool",
-        "Get CPU count (vcpu) and RAM GB for an EC2 instance type from the live AWS catalog. Returns { vcpu, ram_gb, instance_type }.",
+        "Get CPU count (vcpu) and RAM GB for an AWS EC2 instance type from the live AWS catalog. Returns { vcpu, ram_gb, instance_type }. NOTE: Only works for AWS EC2 instance types (e.g. m5.large, t3.medium, c5.xlarge). For Azure (Standard_*) or GCP (n1-/n2-/e2-) instance types, returns catalog_not_available=true — skip the Azure/GCP RAM formula and go directly to suggest_universal_rightsizing_tool.",
         { instance_type: z.string(), region: z.string().default("us-east-1") },
         async ({ instance_type, region }) => {
+          // Detect Azure/GCP instance types before hitting the AWS catalog
+          const isAzure = /^Standard_/i.test(instance_type);
+          const isGcp = /^(n1|n2|n2d|e2|c2|c2d|m1|m2|a2|t2d)-/i.test(instance_type);
+          if (isAzure || isGcp) {
+            return {
+              content: [{
+                type: "text" as const,
+                text: JSON.stringify({
+                  catalog_not_available: true,
+                  reason: `${instance_type} is an ${isAzure ? "Azure" : "GCP"} instance type — not in the AWS catalog. Use suggest_universal_rightsizing_tool for this host.`,
+                }),
+              }],
+            };
+          }
+
           const specs = await getInstanceSpecs(instance_type, region);
           const text = specs
             ? JSON.stringify(specs)
-            : JSON.stringify({ error: `Instance type ${instance_type} not found in AWS catalog for ${region}` });
+            : JSON.stringify({
+                catalog_not_available: true,
+                reason: `${instance_type} not found in AWS catalog for ${region}. Use suggest_universal_rightsizing_tool for this host.`,
+              });
           return { content: [{ type: "text" as const, text }] };
         }
       ),
