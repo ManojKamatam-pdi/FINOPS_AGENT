@@ -345,11 +345,15 @@ export function createHostBatchServer(
             // Datadog metadata column — most authoritative
             instance_type = ddMeta.instance_type.trim();
           } else if (ddMeta.tags) {
-            // Parse instance-type tag from Datadog tags object
+            // Parse instance-type tag from Datadog tags array (format: ["key:value", ...])
             try {
               const tags = typeof ddMeta.tags === "string" ? JSON.parse(ddMeta.tags) : ddMeta.tags;
-              const tagVal = (tags as Record<string, string>)["instance-type"];
-              if (tagVal && tagVal.trim()) instance_type = tagVal.trim();
+              const tagArray: string[] = Array.isArray(tags) ? tags : Object.values(tags as Record<string, string>);
+              const instanceTypeTag = tagArray.find((t: string) => t.startsWith("instance-type:"));
+              if (instanceTypeTag) {
+                const val = instanceTypeTag.split(":").slice(1).join(":").trim();
+                if (val) instance_type = val;
+              }
             } catch { /* ignore */ }
           }
           // Only fall back to agent-provided value when no Datadog metadata was passed at all
