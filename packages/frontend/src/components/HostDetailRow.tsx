@@ -31,6 +31,29 @@ function NoData({ label }: { label: string }) {
   );
 }
 
+function envDisplayLabel(provider: string, subtype: string | null): string {
+  if (provider === 'aws') {
+    if (subtype === 'ec2') return 'AWS EC2';
+    if (subtype === 'ecs') return 'AWS ECS';
+    if (subtype === 'fargate') return 'AWS Fargate';
+    if (subtype === 'kubernetes_node') return 'AWS (EKS node)';
+    return 'AWS';
+  }
+  if (provider === 'azure') {
+    if (subtype === 'kubernetes_node') return 'Azure (AKS node)';
+    return 'Azure';
+  }
+  if (provider === 'gcp') {
+    if (subtype === 'kubernetes_node') return 'GCP (GKE node)';
+    return 'GCP';
+  }
+  if (provider === 'on-prem') {
+    if (subtype === 'vmware') return 'VMware (On-Prem)';
+    return 'On-Prem';
+  }
+  return provider || '—';
+}
+
 export default function HostDetailRow({ host }: Props) {
   const labelColor: Record<string, string> = {
     'over-provisioned': '#dc2626',
@@ -162,8 +185,8 @@ export default function HostDetailRow({ host }: Props) {
 
           {/* Cloud / region */}
           <MetricCard
-            label="Cloud / region"
-            value={host.cloud_provider || '—'}
+            label="Hosted Env"
+            value={envDisplayLabel(host.cloud_provider, host.host_subtype ?? null)}
             sub={host.instance_region ?? undefined}
           />
 
