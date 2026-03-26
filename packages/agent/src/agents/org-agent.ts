@@ -30,9 +30,10 @@ export async function runOrgAnalysis(
 
   // ── Bulk metric pre-fetch ──────────────────────────────────────────────────
   // Fetch all metrics org-wide in one pass before dispatching batch agents.
-  // This collapses N_hosts × 17 per-host Datadog calls into 17 org-wide calls.
-  // Batch agents look up pre-fetched data; hosts not in cache fall back to
-  // per-host queries automatically (graceful degradation for large orgs).
+  // This collapses N_hosts × 23 per-host Datadog calls into 23 org-wide calls
+  // (wildcard path for ≤1000 hosts) or chunked calls (>1000 hosts).
+  // Batch agents call get_prefetched_metrics_tool — always a cache hit.
+  // If pre-fetch fails, all hosts in this org will have efficiency_label = "unknown".
   console.log(`[org_analysis:${tenantId}] Starting metric pre-fetch for ${hosts.length} hosts`);
   try {
     const { metricsStored, hostsWithData } = await runMetricPrefetch(tenantId, runId, hosts);

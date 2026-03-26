@@ -17,7 +17,7 @@ interface UtilFilters {
   netMax: number | null;    // show hosts with avg network in+out ≤ X MB/day
   diskMax: number | null;   // show hosts using ≤ X% of provisioned disk
   labelFilter: string;
-  envFilter: string;        // composite "provider:subtype" — "" means no filter
+  envFilter: string;        // cloud_provider value ("aws"|"azure"|"gcp"|"on-prem"|"unknown") — "" means no filter
 }
 
 const DEFAULT_FILTERS: UtilFilters = {
@@ -108,22 +108,11 @@ export default function HostTable({ hosts }: Props) {
       // label
       if (filters.labelFilter && h.efficiency_label !== filters.labelFilter) return false;
 
-      // Hosted env filter — composite "provider:subtype" encoding
-      // "aws:ec2" = aws + ec2 subtype; "aws:" = aws + null/other subtype; "azure:" = any azure
-      if (filters.envFilter) {
-        const colonIdx = filters.envFilter.indexOf(':');
-        const filterProvider = filters.envFilter.slice(0, colonIdx);
-        const filterSubtype = filters.envFilter.slice(colonIdx + 1); // "" means "other/null"
-        if (h.cloud_provider !== filterProvider) return false;
-        if (filterSubtype !== '') {
-          // Specific subtype — must match exactly
-          if ((h.host_subtype ?? '') !== filterSubtype) return false;
-        } else if (filterProvider === 'aws') {
-          // "aws:" means aws with no specific named subtype (null or unrecognized)
-          const namedSubtypes = ['ec2', 'ecs', 'fargate', 'kubernetes_node'];
-          if (namedSubtypes.includes(h.host_subtype ?? '')) return false;
-        }
-      }
+      // Hosted env filter — matches cloud_provider exactly
+      // host_subtype (EC2/ECS/Fargate/ALB/RDS/etc.) is shown as a badge but not filtered —
+      // AWS surfaces ALBs, RDS, ECS tasks, EKS nodes all as "hosts"; filtering by subtype
+      // would silently exclude legitimate AWS resources that don't match a named subtype.
+      if (filters.envFilter && h.cloud_provider !== filters.envFilter) return false;
 
       return true;
     });
@@ -304,15 +293,11 @@ export default function HostTable({ hosts }: Props) {
                 }}
               >
                 <option value="">All environments</option>
-                <option value="aws:ec2">AWS EC2</option>
-                <option value="aws:ecs">AWS ECS</option>
-                <option value="aws:fargate">AWS Fargate</option>
-                <option value="aws:kubernetes_node">AWS (EKS node)</option>
-                <option value="aws:">AWS (other)</option>
-                <option value="azure:">Azure</option>
-                <option value="gcp:">GCP</option>
-                <option value="on-prem:">On-Prem / VMware</option>
-                <option value="unknown:">Unknown</option>
+                <option value="aws">AWS</option>
+                <option value="azure">Azure</option>
+                <option value="gcp">GCP</option>
+                <option value="on-prem">On-Prem / VMware</option>
+                <option value="unknown">Unknown</option>
               </select>
             </div>
 
