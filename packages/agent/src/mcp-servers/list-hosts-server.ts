@@ -69,7 +69,9 @@ async function callDdMcp(
     }),
   });
 
-  if (!resp.ok) throw new Error(`Datadog MCP returned ${resp.status}: ${await resp.text()}`);
+  if (!resp.ok) {
+    throw new Error(`Datadog MCP returned ${resp.status}: ${await resp.text()}`);
+  }
   const data = await resp.json() as { result?: { content?: Array<{ text: string }>; isError?: boolean }; error?: { message: string } };
   if (data.error) throw new Error(`Datadog MCP error: ${data.error.message}`);
   const text = data.result?.content?.[0]?.text ?? "";
@@ -98,13 +100,22 @@ async function initDdMcpSession(mcpUrl: string, apiKey: string, appKey: string):
     }),
   });
 
-  if (!resp.ok) throw new Error(`Datadog MCP init failed: ${resp.status}`);
+  if (!resp.ok) throw new Error(`Datadog MCP init failed: ${resp.status}: ${await resp.text()}`);
   const sessionId = resp.headers.get("mcp-session-id");
   if (!sessionId) throw new Error("Datadog MCP did not return a session ID");
   return sessionId;
 }
 
-async function fetchAllHostsViaMcp(tenantId: string): Promise<Array<{ host_id: string; host_name: string }>> {
+export interface HostListEntry {
+  host_id: string;
+  host_name: string;
+  /** Total RAM in MiB from Datadog DDSQL — null if not reported by the agent. */
+  memory_mib: number | null;
+  /** Logical CPU count from Datadog DDSQL — null if not reported by the agent. */
+  cpu_logical_processors: number | null;
+}
+
+export async function fetchAllHostsViaMcp(tenantId: string): Promise<HostListEntry[]> {
   const tenants = getTenants();
   const tenant = tenants.find((t: { tenant_id: string }) => t.tenant_id === tenantId);
   if (!tenant) throw new Error(`Tenant ${tenantId} not found in registry`);
@@ -114,10 +125,13 @@ async function fetchAllHostsViaMcp(tenantId: string): Promise<Array<{ host_id: s
 
   const sessionId = await initDdMcpSession(mcpUrl, tenant.dd_api_key, tenant.dd_app_key);
 
-  // Query: fetch hostname only — aliases column is not available in DDSQL.
-  // Aliases are fetched per-host by the batch agent via search_datadog_hosts.
-  const query = "SELECT hostname FROM hosts";
-  const allHosts: Array<{ host_id: string; host_name: string }> = [];
+  // Fetch hostname + hardware specs in one query.
+  // memory_mib and cpu.logical_processors are populated by the Datadog agent when installed.
+  // They are null for hosts with only cloud integrations (no agent).
+  // We use them as a fallback instance_ram_gb / instance_cpu_count when the AWS pricing
+  // catalog has no entry (Azure/GCP hosts, or AWS hosts with no instance-type tag).
+  const query = "SELECT hostname, memory_mib, cpu.logical_processors FROM hosts";
+  const allHosts: HostListEntry[] = [];
   let startAt = 0;
 
   while (true) {
@@ -128,9 +142,19 @@ async function fetchAllHostsViaMcp(tenantId: string): Promise<Array<{ host_id: s
 
     for (const row of rows) {
       const name = row["hostname"] ?? "";
-      if (name) {
-        allHosts.push({ host_id: name, host_name: name });
-      }
+      if (!name) continue;
+
+      const rawMem = row["memory_mib"] ?? "";
+      const rawCpu = row["cpu.logical_processors"] ?? "";
+      const memory_mib = rawMem && rawMem !== "" ? parseFloat(rawMem) || null : null;
+      const cpu_logical_processors = rawCpu && rawCpu !== "" ? parseInt(rawCpu, 10) || null : null;
+
+      allHosts.push({
+        host_id: name,
+        host_name: name,
+        memory_mib: memory_mib !== null && isFinite(memory_mib) ? memory_mib : null,
+        cpu_logical_processors: cpu_logical_processors !== null && isFinite(cpu_logical_processors) ? cpu_logical_processors : null,
+      });
     }
 
     console.log(`[list_hosts:${tenantId}] Page at start_at=${startAt}: got ${rows.length} rows (displayed=${displayedRows}, total=${totalRows}, accumulated=${allHosts.length})`);
@@ -158,7 +182,8 @@ export function createListHostsServer(tenantId: string, runId: string) {
         {},
         async (_input) => {
           const hosts = await fetchAllHostsViaMcp(tenantId);
-          await writeHostList(tenantId, runId, hosts);
+          // writeHostList only needs host_id + host_name
+          await writeHostList(tenantId, runId, hosts.map(h => ({ host_id: h.host_id, host_name: h.host_name })));
           await updateHostsTotal(runId, hosts.length);
           return {
             content: [{

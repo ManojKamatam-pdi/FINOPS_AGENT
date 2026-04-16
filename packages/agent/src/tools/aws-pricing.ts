@@ -8,6 +8,9 @@ const PRICING_BASE = "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/Am
 
 // Cache: region -> { instanceType: monthlyUsd }
 const priceCache = new Map<string, Record<string, number>>();
+// In-flight deduplication: region -> pending fetch promise.
+// Prevents 12 concurrent batches from all firing the same region fetch simultaneously.
+const pendingFetches = new Map<string, Promise<Record<string, number>>>();
 
 async function fetchRegionPrices(region: string): Promise<Record<string, number>> {
   const url = `${PRICING_BASE}/${region}/index.json`;
@@ -56,15 +59,27 @@ async function fetchRegionPrices(region: string): Promise<Record<string, number>
 }
 
 async function getRegionPrices(region: string): Promise<Record<string, number>> {
-  if (!priceCache.has(region)) {
-    try {
-      priceCache.set(region, await fetchRegionPrices(region));
-    } catch (e) {
-      console.error(`[aws-pricing] Failed to fetch pricing for ${region}:`, e);
-      priceCache.set(region, {});
-    }
+  // Return immediately if already cached
+  if (priceCache.has(region)) return priceCache.get(region)!;
+
+  // Deduplicate concurrent fetches for the same region:
+  // all callers that arrive while a fetch is in-flight share the same promise.
+  if (!pendingFetches.has(region)) {
+    const fetch = fetchRegionPrices(region)
+      .then((prices) => {
+        priceCache.set(region, prices);
+        pendingFetches.delete(region);
+        return prices;
+      })
+      .catch((e) => {
+        console.error(`[aws-pricing] Failed to fetch pricing for ${region}:`, e);
+        priceCache.set(region, {});
+        pendingFetches.delete(region);
+        return {} as Record<string, number>;
+      });
+    pendingFetches.set(region, fetch);
   }
-  return priceCache.get(region)!;
+  return pendingFetches.get(region)!;
 }
 
 export async function getInstanceOnDemandPrice(

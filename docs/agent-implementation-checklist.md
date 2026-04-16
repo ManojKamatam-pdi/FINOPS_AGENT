@@ -2,7 +2,7 @@
 
 > **Purpose:** Every Claude session working on this codebase must read this first.
 > This is the single source of truth for what the agent does, what's been fixed, what's known-correct, and what to never break.
-> Last updated: 2026-03-24
+> Last updated: 2026-03-26
 
 ---
 
@@ -27,7 +27,7 @@ The agent runs on the host OS and reports:
 |--------|-----------------|------------|
 | `system.cpu.idle` | % CPU idle | `cpu_avg = 100 - idle` |
 | `system.cpu.user` | % CPU user-space (fallback if idle unavailable) | `cpu_avg = value` |
-| `system.mem.pct_usable` | Fraction of RAM available (0.0–1.0) | `ram_avg = 100 - (value * 100)` |
+| `system.mem.pct_usable` | % of RAM available (0–100) | `ram_avg = 100 - value` |
 | `system.disk.in_use` | Fraction of disk used (0.0–1.0) | `disk_avg = value * 100` |
 | `system.net.bytes_rcvd` | Network bytes received per second | `network_in = value` (bytes/sec) |
 | `system.net.bytes_sent` | Network bytes sent per second | `network_out = value` (bytes/sec) |
@@ -68,11 +68,11 @@ The agent runs on the host OS and reports:
 #### VMware / On-Prem (requires vSphere integration in Datadog)
 | Metric | What it measures | Notes |
 |--------|-----------------|-------|
-| `vsphere.cpu.usage.avg` | CPU % (0–100) | Already a percentage |
-| `vsphere.mem.usage.average` | RAM % (0–100) | Already a percentage |
-| `vsphere.disk.usage.avg` | Disk % (0–100) | Already a percentage |
-| `vsphere.net.received.avg` | Network bytes received | bytes/sec |
-| `vsphere.net.transmitted.avg` | Network bytes sent | bytes/sec |
+| `vsphere.cpu.usage.avg` | CPU % (0–100) | Already a percentage, no transform |
+| `vsphere.mem.usage.average` | RAM % (0–100) | Already a percentage, no transform |
+| `vsphere.disk.usage.avg` | Disk I/O throughput in **KBps** | ⚠️ **NOT disk space %** — this is I/O rate. `disk_avg_30d` stays null for VMware-only hosts |
+| `vsphere.net.received.avg` | Network received in **KBps** | Transform: `× 1024` → bytes/sec for consistency with T1 |
+| `vsphere.net.transmitted.avg` | Network sent in **KBps** | Transform: `× 1024` → bytes/sec for consistency with T1 |
 
 ---
 
@@ -154,20 +154,27 @@ The `write_host_result_tool` accepts a `dd_host_metadata` parameter (the raw `se
 
 ## 5. METRIC COLLECTION STRATEGY
 
-### Execution Order (efficiency-first)
+### Bulk Pre-Fetch (runs once per org, before any batch agent)
 
-**PASS 1 — Issue all T1 queries simultaneously** (regardless of cloud_provider):
-```
-avg:system.cpu.idle{host:<name>}            → cpu_avg = 100 - value
-percentile(95):system.cpu.idle{host:<name>} → cpu_p95 = 100 - value
-avg:system.mem.pct_usable{host:<name>}      → ram_avg = 100 - (value * 100)
-avg:system.net.bytes_rcvd{host:<name>}      → network_in (bytes/sec)
-avg:system.net.bytes_sent{host:<name>}      → network_out (bytes/sec)
-avg:system.disk.in_use{host:<name>}         → disk_avg = value * 100
-```
+`metric-prefetch-agent.ts` fetches all 23 metrics for every known host in a single pass before batch agents start. Strategy chosen at runtime:
 
-**PASS 2 — T2 fallback only for metrics still null after PASS 1**
-(Skip T2 entirely only for confirmed on-prem hosts — vsphere app tag or vsphere T2 probe data)
+- **≤ 1 000 hosts → wildcard path** — one call per metric using `{*} by {host}`. 23 calls total.
+- **> 1 000 hosts → chunked explicit-scope path** — `avg:metric{host:h1 OR host:h2 OR ...} by {host}`. Chunk size computed from actual hostname lengths to stay within URL limits. Example: 3 406 hosts → ~35 chunks × 23 metrics = ~805 calls (vs old per-host approach: 57 902 calls — 36× reduction).
+
+Results stored in DynamoDB `finops_metric_cache` table keyed by `(tenant_id, run_id, metric_name)`. Every host is explicitly named — **100% coverage, no cache misses**.
+
+### Batch Agent Metric Lookup (per host, from cache)
+
+Each batch agent calls `get_prefetched_metrics_tool(host_name)` once per host. This returns all T1 + T2 values from the DynamoDB cache — **no per-host Datadog metric calls**. The in-process memory cache in `metric-cache.ts` ensures the full DynamoDB query runs only once per batch agent process (not once per host).
+
+### p95 CPU — Rollup-Based
+
+p95 is computed via rollup, not the `p95:` space aggregator (which only works for distribution metrics):
+```
+avg:system.cpu.idle{SCOPE} by {host}.rollup(p95, 3600)
+avg:aws.ec2.cpuutilization{SCOPE} by {host}.rollup(p95, 3600)
+```
+Azure, GCP, and VMware T2 integrations do not expose p95 — `cpu_p95_30d` stays null for those without the Datadog agent.
 
 ### Known Null Cases (null is CORRECT, not a bug)
 
@@ -176,7 +183,11 @@ avg:system.disk.in_use{host:<name>}         → disk_avg = value * 100
 | AWS (agentless) | `ram_avg_30d` | CloudWatch has no RAM metric |
 | AWS (agentless) | `disk_avg_30d` | EBS gives I/O throughput, not % full |
 | Azure (agentless) | `disk_avg_30d` | Azure Monitor gives throughput only |
+| Azure (agentless) | `cpu_p95_30d` | Azure Monitor has no p95 aggregation |
 | GCP (agentless) | `disk_avg_30d` | GCP integration gives throughput only |
+| GCP (agentless) | `cpu_p95_30d` | GCP integration has no p95 aggregation |
+| VMware (agentless) | `disk_avg_30d` | `vsphere.disk.usage.avg` is I/O throughput (KBps), not disk space % |
+| VMware (agentless) | `cpu_p95_30d` | vSphere integration has no p95 aggregation |
 | ECS/Fargate | All metrics | Metrics scoped to cluster/task, not host |
 
 ---
@@ -221,29 +232,31 @@ Applied in order — first match wins:
 
 | Parameter | Current Value | File | Rationale |
 |-----------|--------------|------|-----------|
-| `BATCH_SIZE` | 15 | `org-agent.ts:7` | 15 hosts × ~13 turns avg = ~195 turns |
-| `BATCH_CONCURRENCY` | 30 | `org-agent.ts:8` | 30 batches run in parallel per wave |
-| `maxTurns` | 200 | `host-batch-agent.ts:415` | Fits 15 hosts with headroom |
+| `BATCH_SIZE` | 15 | `org-agent.ts:8` | 15 hosts per batch agent |
+| `BATCH_CONCURRENCY` | 30 | `org-agent.ts:9` | 30 batches run in parallel per wave |
+| `maxTurns` | 500 | `host-batch-agent.ts` | Headroom for 15 hosts with pre-fetch architecture |
 
-### Turn Budget per Host (approximate)
-- Step A: 1 search + up to 4 T2 probes (if unknown) = 1–5 turns
-- Step B PASS 1: 6 T1 queries = 6 turns (but reuses T2 probe results from Step A)
-- Step B PASS 2: 0–4 T2 fallback queries
-- Step C: 1 specs lookup (if instance_type known)
-- Step D: 1–3 right-sizing tool calls
-- Step E: 1 write
-- **Total: ~8–13 turns per host** (best case 8, worst case 18 for unknown provider)
+### Turn Budget per Host (with pre-fetch — approximate)
+
+- Phase 1 (same turn): `search_datadog_hosts` + `get_prefetched_metrics_tool` = 1 turn (parallel)
+- Phase 2: T2 classification from cache (no tool calls — reads from metrics map already returned)
+- Phase 3: `get_instance_specs_tool` (if instance_type known) = 1 turn
+- Phase 4: 1–2 right-sizing tool calls
+- Phase 5: `write_host_result_tool` = 1 turn
+- **Total: ~4–6 turns per host** (vs ~8–13 with old per-host queries)
 
 ### Wave Math for 3533 hosts
+
 - 3533 hosts ÷ 15 per batch = 236 batches
 - 236 batches ÷ 30 concurrency = 8 waves
-- Each wave: ~30 batches × ~13 turns × ~2s/turn = ~780s ≈ 13 min per wave
-- Total: ~8 waves × 13 min = ~104 min (vs ~180 min with BATCH_SIZE=10)
+- Pre-fetch: ~805 Datadog calls (one-time, before waves start)
+- Each wave: ~30 batches × ~5 turns × ~2s/turn = ~300s ≈ 5 min per wave
+- Total: ~8 waves × 5 min = ~40 min (vs ~104 min with old per-host queries)
 
 ### Further Optimization Opportunities
+
 1. **Pre-fetch host metadata in bulk** — query all hosts in a batch with a single DDSQL `WHERE hostname IN (...)` before the agent starts, inject into the prompt. Saves 1 `search_datadog_hosts` call per host = 15 turns per batch.
 2. **Skip T2 probes for confirmed AWS hosts** — if `hostname_aliases` contains `i-*` or `aws_account` tag present, skip T2 probe entirely in Step A.
-3. **Batch metric queries** — `get_datadog_metric` accepts multiple `queries` in one call. Issue all 6 T1 metrics in a single call instead of 6 separate calls. Saves 5 turns per host = 75 turns per batch.
 
 ---
 
@@ -305,6 +318,11 @@ if (filters.netMax !== null) {
 | 18 | Network filter treating null as 0 MB/day | Null network hosts excluded when filter active | HostTable.tsx |
 | 19 | Network unit conversion wrong (bytes/sec → MB/day) | Fixed: `× 86400 / (1024*1024)` | HostTable.tsx |
 | 20 | Agent hallucinating instance_type from hostname | `dd_host_metadata` passed to write tool; server extracts from Datadog directly | host-batch-server.ts + host-batch-agent.ts |
+| 21 | Query templates used `{{SCOPE}}` (double braces) — `.replace("{SCOPE}", ...)` never matched; all 23 metrics returned zero data | Changed templates to single-brace `{SCOPE}` | metric-prefetch-agent.ts |
+| 22 | `p95:metric_name` aggregator invalid for standard gauge metrics (only works for DDSketch distribution metrics) | Changed to `.rollup(p95, 3600)` on avg query | metric-prefetch-agent.ts |
+| 23 | `vsphere.disk.usage.avg` is disk I/O throughput (KBps), not disk space % — was being used as `disk_avg_30d` | Marked as informational-only; `disk_avg_30d` stays null for VMware-only hosts | metric-prefetch-agent.ts + host-batch-agent.ts |
+| 24 | `vsphere.net.received/transmitted.avg` in KBps but stored as bytes/sec — 1024× unit mismatch vs T1 | Added `× 1024` conversion in agent prompt | host-batch-agent.ts |
+| 25 | `getHostMetricsFromCache` did full DynamoDB Query per host — 15 calls per batch, no caching | Added in-process `Map` cache; DynamoDB query runs once per batch agent process | metric-cache.ts |
 
 ---
 
@@ -345,8 +363,10 @@ Every host result must have all these fields. `null` is valid; absent/missing is
 | File | Purpose |
 |------|---------|
 | `packages/agent/src/agents/host-batch-agent.ts` | Agent system prompt — all classification, metric, and right-sizing rules |
-| `packages/agent/src/agents/org-agent.ts` | Orchestrator — BATCH_SIZE, BATCH_CONCURRENCY, wave execution |
-| `packages/agent/src/mcp-servers/host-batch-server.ts` | MCP tools — write_host_result_tool (server-side normalization, label recompute, instance_type validation) |
+| `packages/agent/src/agents/org-agent.ts` | Orchestrator — BATCH_SIZE, BATCH_CONCURRENCY, wave execution, pre-fetch phase |
+| `packages/agent/src/agents/metric-prefetch-agent.ts` | Bulk metric pre-fetch — 23 metrics org-wide before batch agents run |
+| `packages/agent/src/mcp-servers/host-batch-server.ts` | MCP tools — get_prefetched_metrics_tool, write_host_result_tool, rightsizing tools |
+| `packages/agent/src/tools/metric-cache.ts` | DynamoDB read/write for finops_metric_cache; in-process memory cache |
 | `packages/agent/src/config/dd-org-registry.json` | Datadog org credentials (PDI-Enterprise, PDI-Orbis) |
 | `packages/agent/src/config/mcp-registry.ts` | Builds HTTP MCP server configs from registry |
 | `packages/agent/src/tools/aws-instances.ts` | EC2 instance specs + right-sizing math |
@@ -385,4 +405,4 @@ const MCP_URL = 'https://mcp.datadoghq.com/api/unstable/mcp-server/mcp?toolsets=
 
 ---
 
-*This document reflects the implementation as of 2026-03-24. Update Section 10 when new bugs are fixed.*
+*This document reflects the implementation as of 2026-03-26. Update Section 10 when new bugs are fixed.*

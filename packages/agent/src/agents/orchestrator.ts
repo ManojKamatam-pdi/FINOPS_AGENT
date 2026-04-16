@@ -11,11 +11,23 @@ export async function runOrchestrator(
   console.log(`[orchestrator] Starting run ${runId} for ${tenants.length} tenants`);
 
   try {
-    await Promise.all(
+    // Run all orgs in parallel — use allSettled so one org failing doesn't abort others.
+    const orgResults = await Promise.allSettled(
       tenants.map((tenant) =>
         runOrgAnalysis(tenant.tenant_id, runId)
       )
     );
+
+    // Log per-org outcomes
+    for (let i = 0; i < orgResults.length; i++) {
+      const r = orgResults[i];
+      const tid = tenants[i].tenant_id;
+      if (r.status === "rejected") {
+        console.error(`[orchestrator] Org ${tid} failed:`, r.reason);
+      } else {
+        console.log(`[orchestrator] Org ${tid} completed`);
+      }
+    }
 
     // Don't mark completed if aborted mid-run
     if (isAborted(runId)) {
@@ -35,8 +47,14 @@ export async function runOrchestrator(
       return;
     }
 
+    // If any org failed but we still have hosts, mark completed (partial success is still useful).
+    const anyFailed = orgResults.some((r) => r.status === "rejected");
+    if (anyFailed) {
+      console.warn(`[orchestrator] Run ${runId} completed with partial failures — ${hostsDone} hosts processed`);
+    } else {
+      console.log(`[orchestrator] Run ${runId} completed successfully (${hostsDone} hosts processed)`);
+    }
     await updateRunStatus(runId, "completed", new Date().toISOString());
-    console.log(`[orchestrator] Run ${runId} completed successfully (${hostsDone} hosts processed)`);
   } catch (err) {
     if (isAborted(runId)) {
       console.log(`[orchestrator] Run ${runId} aborted (caught error during abort)`);

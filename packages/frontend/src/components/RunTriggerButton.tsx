@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
-import { triggerRun, ConflictInfo } from '../services/api';
+import { triggerRun, ConflictInfo, ActiveRunInfo } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 
 interface Props {
   onRunStarted: (runId: string) => void;
   onAlreadyRunning: (conflict: ConflictInfo) => void;
+  activeRun?: ActiveRunInfo | null;
 }
 
-export default function RunTriggerButton({ onRunStarted, onAlreadyRunning }: Props) {
+export default function RunTriggerButton({ onRunStarted, onAlreadyRunning, activeRun }: Props) {
   const { token } = useAuth();
   const [confirming, setConfirming] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -41,15 +42,20 @@ export default function RunTriggerButton({ onRunStarted, onAlreadyRunning }: Pro
   }
 
   return (
-    <button onClick={handleClick} disabled={loading} style={btnStyle('#0066cc')}>
+    <button
+      onClick={handleClick}
+      disabled={loading || !!activeRun}
+      style={btnStyle(activeRun ? '#94a3b8' : '#0066cc', !!activeRun)}
+    >
       {loading ? 'Starting...' : '▶ Run Fresh Analysis'}
     </button>
   );
 }
 
-function btnStyle(bg: string): React.CSSProperties {
+function btnStyle(bg: string, disabled = false): React.CSSProperties {
   return {
     padding: '8px 16px', background: bg, color: 'white', border: 'none',
-    borderRadius: 6, fontSize: 14, fontWeight: 600, cursor: 'pointer',
+    borderRadius: 6, fontSize: 14, fontWeight: 600,
+    cursor: disabled ? 'not-allowed' : 'pointer',
   };
 }

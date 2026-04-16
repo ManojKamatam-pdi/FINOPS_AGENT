@@ -4,518 +4,722 @@ import { writeHostResult, updateRunProgress } from "../tools/dynamodb.js";
 import { getInstanceSpecs, suggestRightSizedInstance, getAllInstancesSortedByPrice, CANDIDATE_FAMILIES_V1 } from "../tools/aws-instances.js";
 import { getPricesForInstances, getInstanceOnDemandPrice } from "../tools/aws-pricing.js";
 import { getHostMetricsFromCache } from "../tools/metric-cache.js";
+import { getHostMetadataFromCache } from "../tools/host-metadata-cache.js";
+import { getTenants } from "../config/tenants.js";
+
+const DD_MCP_BASE: Record<string, string> = {
+  "datadoghq.com":     "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp",
+  "datadoghq.eu":      "https://mcp.datadoghq.eu/api/unstable/mcp-server/mcp",
+  "us3.datadoghq.com": "https://mcp.us3.datadoghq.com/api/unstable/mcp-server/mcp",
+  "us5.datadoghq.com": "https://mcp.us5.datadoghq.com/api/unstable/mcp-server/mcp",
+  "ap1.datadoghq.com": "https://mcp.ap1.datadoghq.com/api/unstable/mcp-server/mcp",
+};
+
+/** Parse the TSV_DATA block from a search_datadog_hosts MCP response. */
+function parseTsvRow(text: string, hostname: string): Record<string, string> | null {
+  const match = text.match(/<TSV_DATA>\n([\s\S]*?)\n<\/TSV_DATA>/);
+  if (!match) return null;
+  const lines = match[1].split("\n").filter(Boolean);
+  if (lines.length < 2) return null;
+  const headers = lines[0].split("\t");
+  for (const line of lines.slice(1)) {
+    const cols = line.split("\t");
+    const row = Object.fromEntries(headers.map((h, i) => [h, cols[i] ?? ""]));
+    if (row["hostname"] === hostname) return row;
+  }
+  return null;
+}
+
+// ─── Metrics shape returned by getHostMetricsFromCache ────────────────────────
+interface HostMetrics {
+  "system.cpu.idle"?: number | null;
+  "system.cpu.idle.p95"?: number | null;
+  "system.mem.pct_usable"?: number | null;
+  "system.disk.in_use"?: number | null;
+  "system.net.bytes_rcvd"?: number | null;
+  "system.net.bytes_sent"?: number | null;
+  "aws.ec2.cpuutilization"?: number | null;
+  "aws.ec2.cpuutilization.p95"?: number | null;
+  "aws.ec2.network_in"?: number | null;
+  "aws.ec2.network_out"?: number | null;
+  "azure.vm.percentage_cpu"?: number | null;
+  "azure.vm.available_memory_bytes"?: number | null;
+  "azure.vm.network_in_total"?: number | null;
+  "azure.vm.network_out_total"?: number | null;
+  "gcp.gce.instance.cpu.utilization"?: number | null;
+  "gcp.gce.instance.memory.balloon.ram_used"?: number | null;
+  "gcp.gce.instance.network.received_bytes_count"?: number | null;
+  "gcp.gce.instance.network.sent_bytes_count"?: number | null;
+  "vsphere.cpu.usage.avg"?: number | null;
+  "vsphere.mem.usage.average"?: number | null;
+  "vsphere.disk.usage.avg"?: number | null;
+  "vsphere.net.received.avg"?: number | null;
+  "vsphere.net.transmitted.avg"?: number | null;
+}
+
+// ─── Metadata shape returned by getHostMetadataFromCache ─────────────────────
+interface CachedMeta {
+  aliases: string[];
+  tags: string[];
+  apps: string[];
+  instance_type: string | null;
+  cloud_provider: string | null;
+  /** Total RAM in MiB from DDSQL — used as fallback instance_ram_gb when pricing catalog has no entry. */
+  memory_mib: number | null;
+  /** Logical CPU count from DDSQL — used as fallback instance_cpu_count when pricing catalog has no entry. */
+  cpu_logical_processors: number | null;
+}
+
+// ─── Canonical result shape written to DynamoDB ───────────────────────────────
+interface HostResult {
+  host_name: string;
+  cloud_provider: string;
+  host_subtype: string | null;
+  cpu_avg_30d: number | null;
+  cpu_p95_30d: number | null;
+  ram_avg_30d: number | null;
+  network_in_avg_30d: number | null;
+  network_out_avg_30d: number | null;
+  disk_avg_30d: number | null;
+  instance_type: string | null;
+  instance_region: string | null;
+  instance_cpu_count: number | null;
+  instance_ram_gb: number | null;
+  has_instance_tag: boolean;
+  catalog_data_available: boolean;
+  current_monthly_cost: number | null;
+  suggested_instance: string | null;
+  suggested_monthly_cost: number | null;
+  monthly_savings: number | null;
+  savings_percent: number | null;
+  pricing_calc_url: string | null;
+  efficiency_score: number | null;
+  efficiency_label: string;
+  recommendation: string;
+  analyzed_at: string;
+}
+
+// ─── Step A: Classify host from metadata ─────────────────────────────────────
+// Implements the 14-rule classification decision tree from the system prompt.
+// Returns { cloud_provider, host_subtype, instance_type, instance_region }.
+function classifyHost(
+  aliases: string[],
+  tags: string[],
+  apps: string[],
+  metaInstanceType: string | null,
+  metaCloudProvider: string | null,
+  metrics: HostMetrics
+): {
+  cloud_provider: string;
+  host_subtype: string | null;
+  instance_type: string | null;
+  instance_region: string | null;
+} {
+  let cloud_provider: string | null = null;
+  let host_subtype: string | null = null;
+  let instance_region: string | null = null;
+
+  // Rule 1: EC2 instance ID alias
+  for (const alias of aliases) {
+    if (/^i-[0-9a-f]{8,17}$/i.test(alias.trim())) {
+      cloud_provider = "aws";
+      host_subtype = "ec2";
+      break;
+    }
+  }
+
+  // Rule 2: apps/sources
+  if (!cloud_provider) {
+    const appsLower = apps.map(a => a.toLowerCase());
+    if (appsLower.includes("ecs")) { cloud_provider = "aws"; host_subtype = "ecs"; }
+    else if (appsLower.includes("fargate")) { cloud_provider = "aws"; host_subtype = "fargate"; }
+    else if (appsLower.some(a => a === "vsphere" || a === "vmware")) { cloud_provider = "on-prem"; host_subtype = "vmware"; }
+    else if (appsLower.some(a => a === "kubernetes" || a === "k8s")) { host_subtype = "kubernetes_node"; }
+  }
+
+  // Rules 3–6: tags
+  if (!cloud_provider) {
+    for (const tag of tags) {
+      const [k, ...vParts] = tag.split(":");
+      const v = vParts.join(":").trim();
+      const key = k.trim().toLowerCase();
+
+      // Rule 3: instance-type tag
+      if (key === "instance-type" && v) {
+        if (/^(t[23456]|m[456789]|c[456789]|r[456789]|x[12]|z1d|a1|inf|trn|hpc|p[234]|g[34]|i[234]|d[23]|h1|f1)/i.test(v)) {
+          cloud_provider = "aws"; break;
+        }
+        if (/^Standard_/i.test(v)) { cloud_provider = "azure"; break; }
+        if (/^(n[12]d?|e2|c[2]d?|m[12]|a2|t2d)-/i.test(v)) { cloud_provider = "gcp"; break; }
+      }
+
+      // Rule 4: region / availability-zone tags
+      if (key === "region" && v) {
+        if (/^(us|eu|ap|sa|ca|me|af)-[a-z]+-\d+/.test(v)) { cloud_provider = "aws"; instance_region = v; break; }
+        if (/^(eastus|westus|northeurope|westeurope|uksouth|ukwest|australiaeast|australiasoutheast|centralus|southcentralus|northcentralus|westcentralus|canadacentral|canadaeast|brazilsouth|japaneast|japanwest|koreacentral|koreasouth|southeastasia|eastasia|centralindia|southindia|westindia|francecentral|francesouth|germanywestcentral|norwayeast|switzerlandnorth|uaenorth|southafricanorth)/i.test(v)) {
+          cloud_provider = "azure"; instance_region = v; break;
+        }
+        if (/^(us-central1|us-east1|us-east4|us-west1|us-west2|us-west3|us-west4|northamerica-northeast1|southamerica-east1|europe-west[1-9]|europe-north1|europe-central2|asia-east[12]|asia-northeast[123]|asia-south[12]|asia-southeast[12]|australia-southeast[12]|me-west1|africa-south1)/.test(v)) {
+          cloud_provider = "gcp"; instance_region = v; break;
+        }
+      }
+      if (key === "availability-zone" && v) {
+        const azMatch = v.match(/^((us|eu|ap|sa|ca|me|af)-[a-z]+-\d+)[a-z]$/);
+        if (azMatch) { cloud_provider = "aws"; instance_region = azMatch[1]; break; }
+      }
+
+      // Rule 5: explicit cloud tags
+      if (key === "cloud_provider" && v) {
+        const norm: Record<string, string> = { aws: "aws", azure: "azure", gcp: "gcp", "on-prem": "on-prem", "on-premise": "on-prem", "on-premises": "on-prem" };
+        if (norm[v.toLowerCase()]) { cloud_provider = norm[v.toLowerCase()]; break; }
+      }
+      if (key === "subscriptionid") { cloud_provider = "azure"; break; }
+      if (key === "project_id") { cloud_provider = "gcp"; break; }
+
+      // Rule 6: aws_account tag
+      if (key === "aws_account") { cloud_provider = "aws"; break; }
+    }
+  }
+
+  // Rules 7–8: T2 metric probes (only if still unknown)
+  if (!cloud_provider) {
+    if ((metrics["aws.ec2.cpuutilization"] ?? null) !== null) {
+      cloud_provider = "aws"; host_subtype = host_subtype ?? "ec2";
+    } else if ((metrics["azure.vm.percentage_cpu"] ?? null) !== null) {
+      cloud_provider = "azure";
+    } else if ((metrics["gcp.gce.instance.cpu.utilization"] ?? null) !== null) {
+      cloud_provider = "gcp";
+    } else if ((metrics["vsphere.cpu.usage.avg"] ?? null) !== null) {
+      cloud_provider = "on-prem"; host_subtype = "vmware";
+    } else {
+      cloud_provider = "unknown";
+    }
+  }
+
+  // Normalize cloud_provider to canonical values
+  const providerNormMap: Record<string, string> = {
+    "on-premise": "on-prem", "on-premises": "on-prem", "onprem": "on-prem",
+    "on_prem": "on-prem", "bare-metal": "on-prem", "baremetal": "on-prem", "vmware": "on-prem",
+    "on-prem/unknown": "unknown", "unknown/on-prem": "unknown",
+  };
+  const canonical = new Set(["aws", "azure", "gcp", "on-prem", "unknown"]);
+  cloud_provider = providerNormMap[cloud_provider.toLowerCase()] ?? cloud_provider;
+  if (!canonical.has(cloud_provider)) cloud_provider = "unknown";
+
+  // instance_type: prefer metadata field, then instance-type tag
+  let instance_type = metaInstanceType ?? null;
+  if (!instance_type) {
+    for (const tag of tags) {
+      if (tag.startsWith("instance-type:")) {
+        const val = tag.split(":").slice(1).join(":").trim();
+        if (val) { instance_type = val; break; }
+      }
+    }
+  }
+
+  // instance_region from tags (if not already set)
+  if (!instance_region) {
+    for (const tag of tags) {
+      const [k, ...vParts] = tag.split(":");
+      const v = vParts.join(":").trim();
+      if (k.trim().toLowerCase() === "region" && v) { instance_region = v; break; }
+      if (k.trim().toLowerCase() === "availability-zone" && v) {
+        const m = v.match(/^((us|eu|ap|sa|ca|me|af)-[a-z]+-\d+)[a-z]$/);
+        if (m) { instance_region = m[1]; break; }
+      }
+    }
+  }
+
+  return { cloud_provider, host_subtype, instance_type, instance_region };
+}
+
+// ─── Step B: Extract canonical metrics from the raw cache map ─────────────────
+function extractMetrics(
+  m: HostMetrics,
+  instance_ram_gb: number | null
+): {
+  cpu_avg_30d: number | null;
+  cpu_p95_30d: number | null;
+  ram_avg_30d: number | null;
+  disk_avg_30d: number | null;
+  network_in_avg_30d: number | null;
+  network_out_avg_30d: number | null;
+} {
+  // T1 preferred, T2 fallback
+  const idle    = m["system.cpu.idle"]       ?? null;
+  const idleP95 = m["system.cpu.idle.p95"]   ?? null;
+  const memPct  = m["system.mem.pct_usable"] ?? null;
+  const diskFrac = m["system.disk.in_use"]   ?? null;
+
+  const cpu_avg_30d: number | null =
+    idle !== null ? Math.min(100, Math.max(0, 100 - idle)) :
+    (m["aws.ec2.cpuutilization"] ?? null) !== null ? m["aws.ec2.cpuutilization"]! :
+    (m["azure.vm.percentage_cpu"] ?? null) !== null ? m["azure.vm.percentage_cpu"]! :
+    (m["gcp.gce.instance.cpu.utilization"] ?? null) !== null
+      ? Math.min(100, (m["gcp.gce.instance.cpu.utilization"]! > 1 ? m["gcp.gce.instance.cpu.utilization"]! : m["gcp.gce.instance.cpu.utilization"]! * 100))
+    : (m["vsphere.cpu.usage.avg"] ?? null) !== null ? m["vsphere.cpu.usage.avg"]!
+    : null;
+
+  const cpu_p95_30d: number | null =
+    idleP95 !== null ? Math.min(100, Math.max(0, 100 - idleP95)) :
+    (m["aws.ec2.cpuutilization.p95"] ?? null) !== null ? m["aws.ec2.cpuutilization.p95"]!
+    : null;
+
+  // RAM: T1 preferred, then T2 (Azure/GCP need instance_ram_gb for conversion)
+  let ram_avg_30d: number | null = null;
+  if (memPct !== null) {
+    // system.mem.pct_usable is a FRACTION (0–1): 0.2 = 20% free = 80% used.
+    // Correct formula: (1 - fraction) * 100 = % used.
+    ram_avg_30d = Math.min(100, Math.max(0, (1 - memPct) * 100));
+  } else if ((m["vsphere.mem.usage.average"] ?? null) !== null) {
+    ram_avg_30d = m["vsphere.mem.usage.average"]!;
+  } else if ((m["azure.vm.available_memory_bytes"] ?? null) !== null && instance_ram_gb) {
+    const totalBytes = instance_ram_gb * 1073741824;
+    ram_avg_30d = Math.min(100, Math.max(0, 100 - (m["azure.vm.available_memory_bytes"]! / totalBytes) * 100));
+  } else if ((m["gcp.gce.instance.memory.balloon.ram_used"] ?? null) !== null && instance_ram_gb) {
+    const totalBytes = instance_ram_gb * 1073741824;
+    ram_avg_30d = Math.min(100, Math.max(0, (m["gcp.gce.instance.memory.balloon.ram_used"]! / totalBytes) * 100));
+  }
+
+  const disk_avg_30d: number | null =
+    diskFrac !== null ? Math.min(100, Math.max(0, diskFrac * 100)) : null;
+
+  const network_in_avg_30d: number | null =
+    (m["system.net.bytes_rcvd"] ?? null) !== null ? m["system.net.bytes_rcvd"]! :
+    (m["aws.ec2.network_in"] ?? null) !== null ? m["aws.ec2.network_in"]! :
+    (m["azure.vm.network_in_total"] ?? null) !== null ? m["azure.vm.network_in_total"]! :
+    (m["gcp.gce.instance.network.received_bytes_count"] ?? null) !== null ? m["gcp.gce.instance.network.received_bytes_count"]! :
+    (m["vsphere.net.received.avg"] ?? null) !== null ? m["vsphere.net.received.avg"]! * 1024
+    : null;
+
+  const network_out_avg_30d: number | null =
+    (m["system.net.bytes_sent"] ?? null) !== null ? m["system.net.bytes_sent"]! :
+    (m["aws.ec2.network_out"] ?? null) !== null ? m["aws.ec2.network_out"]! :
+    (m["azure.vm.network_out_total"] ?? null) !== null ? m["azure.vm.network_out_total"]! :
+    (m["gcp.gce.instance.network.sent_bytes_count"] ?? null) !== null ? m["gcp.gce.instance.network.sent_bytes_count"]! :
+    (m["vsphere.net.transmitted.avg"] ?? null) !== null ? m["vsphere.net.transmitted.avg"]! * 1024
+    : null;
+
+  return { cpu_avg_30d, cpu_p95_30d, ram_avg_30d, disk_avg_30d, network_in_avg_30d, network_out_avg_30d };
+}
+
+// ─── Compute efficiency label from metrics ────────────────────────────────────
+// Under-provisioned: ANY dimension is saturated.
+// Over-provisioned: ALL available dimensions are low (need at least CPU or RAM).
+// This prevents a RAM-bound host (high RAM, low CPU) from being called over-provisioned.
+function computeEfficiencyLabel(
+  cpu_p95: number | null,
+  cpu_avg: number | null,
+  ram_avg: number | null,
+  disk_avg: number | null
+): string {
+  const cpu_for_label = cpu_p95 ?? cpu_avg;
+  if (cpu_for_label === null && ram_avg === null && disk_avg === null) return "unknown";
+
+  // Under-provisioned: any dimension is saturated
+  if ((cpu_for_label ?? 0) > 80) return "under-provisioned";
+  if ((ram_avg ?? 0) > 85) return "under-provisioned";
+  if ((disk_avg ?? 0) > 85) return "under-provisioned";
+
+  // Over-provisioned: all available dimensions are low.
+  // Only include a dimension in the check if we actually have data for it.
+  // Require at least CPU or RAM data before calling something over-provisioned.
+  if (cpu_for_label === null && ram_avg === null) return "right-sized";
+  const cpuLow  = cpu_for_label !== null ? cpu_for_label < 20 : true; // absent = not a constraint
+  const ramLow  = ram_avg       !== null ? ram_avg       < 40 : true; // absent = not a constraint
+  const diskLow = disk_avg      !== null ? disk_avg      < 40 : true; // absent = not a constraint
+  if (cpuLow && ramLow && diskLow) return "over-provisioned";
+
+  return "right-sized";
+}
+
+// ─── Build recommendation sentence ───────────────────────────────────────────
+function buildRecommendation(
+  efficiency_label: string,
+  cpu_avg: number | null,
+  cpu_p95: number | null,
+  ram_avg: number | null,
+  disk_avg: number | null,
+  network_in: number | null,
+  network_out: number | null,
+  instance_type: string | null,
+  host_subtype: string | null,
+  current_monthly_cost: number | null,
+  suggested_instance: string | null,
+  suggested_monthly_cost: number | null,
+  monthly_savings: number | null,
+  ram_unavailable: boolean
+): string {
+  // ECS/Fargate: special case
+  if (host_subtype === "ecs" || host_subtype === "fargate") {
+    return "ECS/Fargate task — container-level metrics are not scoped to host in Datadog. Use AWS Container Insights or the Datadog container integration to analyze resource utilization at the task/container level.";
+  }
+
+  const parts: string[] = [];
+  if (cpu_avg !== null) parts.push(`CPU avg ${cpu_avg.toFixed(1)}%`);
+  if (cpu_p95 !== null) parts.push(`CPU p95 ${cpu_p95.toFixed(1)}%`);
+  if (ram_avg !== null) parts.push(`RAM avg ${ram_avg.toFixed(1)}%`);
+  if (disk_avg !== null) parts.push(`disk ${disk_avg.toFixed(1)}%`);
+  if (network_in !== null) parts.push(`net-in ${(network_in / 1_000_000).toFixed(1)} MB/s`);
+  if (network_out !== null) parts.push(`net-out ${(network_out / 1_000_000).toFixed(1)} MB/s`);
+
+  if (parts.length === 0) {
+    if (instance_type && current_monthly_cost) {
+      return `No utilization metrics available for this ${instance_type} (~$${current_monthly_cost.toFixed(0)}/month) — install the Datadog agent or enable the cloud integration to enable right-sizing analysis.`;
+    }
+    return "No metric data available for this host over the 30-day window. Host may be stopped, terminated, or neither the Datadog agent nor a cloud integration is configured.";
+  }
+
+  const metricSummary = parts.join(", ");
+  const instanceNote = instance_type ? ` on ${instance_type}` : "";
+
+  if (ram_unavailable) {
+    return `${metricSummary} over 30 days${instanceNote}; RAM utilization unavailable — likely ${efficiency_label} but verify RAM usage before acting on this recommendation.`;
+  }
+
+  if (efficiency_label === "over-provisioned") {
+    if (suggested_instance && monthly_savings && monthly_savings > 0) {
+      return `${metricSummary} over 30 days${instanceNote} — over-provisioned; downsize to ${suggested_instance} to save ~$${monthly_savings.toFixed(0)}/month.`;
+    }
+    return `${metricSummary} over 30 days${instanceNote} — over-provisioned; consider downsizing to reduce costs.`;
+  }
+
+  if (efficiency_label === "under-provisioned") {
+    // Identify which dimensions are saturated
+    const cpuBound  = (cpu_p95 !== null && cpu_p95 > 80) || (cpu_avg !== null && cpu_avg > 80);
+    const ramBound  = ram_avg  !== null && ram_avg  > 85;
+    const diskBound = disk_avg !== null && disk_avg > 85;
+
+    const concerns: string[] = [];
+    if (cpuBound)  concerns.push(`CPU p95 at ${(cpu_p95 ?? cpu_avg)!.toFixed(1)}%`);
+    if (ramBound)  concerns.push(`RAM at ${ram_avg!.toFixed(1)}%`);
+    if (diskBound) concerns.push(`disk at ${disk_avg!.toFixed(1)}%`);
+
+    // Dimension-specific action advice
+    const actions: string[] = [];
+
+    if (ramBound && !cpuBound) {
+      // RAM-bound only: suggest memory-optimized family, keep same CPU count
+      const suggestNote = suggested_instance
+        ? `upgrade to a memory-optimized instance (e.g. ${suggested_instance})`
+        : "upgrade to a memory-optimized instance family (r5/r6i/r7i) to add RAM without increasing CPU count";
+      actions.push(suggestNote);
+    } else if (cpuBound && !ramBound) {
+      // CPU-bound only: suggest compute-optimized
+      const suggestNote = suggested_instance
+        ? `upgrade to a compute-optimized instance (e.g. ${suggested_instance})`
+        : "upgrade to a compute-optimized instance family (c5/c6i/c7i) or larger general-purpose (m6i/m7i)";
+      actions.push(suggestNote);
+    } else if (cpuBound && ramBound) {
+      // Both saturated: general scale-up
+      const suggestNote = suggested_instance
+        ? `scale up to ${suggested_instance}`
+        : "scale up to a larger general-purpose instance (m6i/m7i) or memory-optimized (r6i/r7i)";
+      actions.push(suggestNote);
+    }
+
+    if (diskBound) {
+      // Disk saturation is a storage problem, not an instance-size problem
+      actions.push("expand EBS volume or clean up data (disk saturation is a storage issue, not instance size)");
+    }
+
+    const actionText = actions.length > 0
+      ? actions.join("; ")
+      : "consider scaling up to avoid performance issues";
+
+    return `${metricSummary} over 30 days${instanceNote} — under-provisioned (${concerns.join(", ")}); ${actionText}.`;
+  }
+
+  if (efficiency_label === "right-sized") {
+    return `${metricSummary} over 30 days${instanceNote} — right-sized for current workload.`;
+  }
+
+  return `${metricSummary} over 30 days${instanceNote} — insufficient metric data for a definitive recommendation.`;
+}
+
+// ─── Core per-host processing logic ──────────────────────────────────────────
+// Called by process_batch_tool for each host in parallel.
+async function processOneHost(
+  host_name: string,
+  rawMetrics: HostMetrics | null,
+  meta: CachedMeta | null,
+  _tenantId: string,
+  _runId: string
+): Promise<HostResult> {
+  const metrics: HostMetrics = rawMetrics ?? {};
+  const aliases = meta?.aliases ?? [];
+  const tags    = meta?.tags    ?? [];
+  const apps    = meta?.apps    ?? [];
+
+  // ── Step A: Classify ──────────────────────────────────────────────────────
+  const { cloud_provider, host_subtype, instance_type, instance_region } = classifyHost(
+    aliases, tags, apps,
+    meta?.instance_type ?? null,
+    meta?.cloud_provider ?? null,
+    metrics
+  );
+
+  // ── Step C: Instance specs (needed for Azure/GCP RAM conversion) ──────────
+  let instance_cpu_count: number | null = null;
+  let instance_ram_gb: number | null = null;
+  let catalog_data_available = false;
+
+  if (instance_type) {
+    const isAzure = /^Standard_/i.test(instance_type);
+    const isGcp   = /^(n[12]d?|e2|c[2]d?|m[12]|a2|t2d)-/i.test(instance_type);
+    if (!isAzure && !isGcp) {
+      // AWS instance — look up specs
+      const region = instance_region ?? "us-east-1";
+      const specs = await getInstanceSpecs(instance_type, region);
+      if (specs) {
+        instance_cpu_count = specs.vcpu;
+        instance_ram_gb    = specs.ram_gb;
+        catalog_data_available = true;
+      }
+    }
+  }
+
+  // ── DDSQL hardware fallback ────────────────────────────────────────────────
+  // If the pricing catalog has no entry (Azure/GCP hosts, or AWS hosts with no
+  // instance-type tag), use memory_mib and cpu_logical_processors from the DDSQL
+  // SELECT query run at list-hosts time. This enables RAM % calculation for
+  // azure.vm.available_memory_bytes and gcp.gce.instance.memory.balloon.ram_used
+  // without any additional MCP calls.
+  if (instance_ram_gb === null && meta?.memory_mib) {
+    instance_ram_gb = meta.memory_mib / 1024; // MiB → GiB
+  }
+  if (instance_cpu_count === null && meta?.cpu_logical_processors) {
+    instance_cpu_count = meta.cpu_logical_processors;
+  }
+
+  // ── Step B: Extract metrics (needs instance_ram_gb for Azure/GCP RAM) ─────
+  const {
+    cpu_avg_30d, cpu_p95_30d, ram_avg_30d, disk_avg_30d,
+    network_in_avg_30d, network_out_avg_30d,
+  } = extractMetrics(metrics, instance_ram_gb);
+
+  // ── Step D: Right-sizing ──────────────────────────────────────────────────
+  let current_monthly_cost:   number | null = null;
+  let suggested_instance:     string | null = null;
+  let suggested_monthly_cost: number | null = null;
+  let monthly_savings:        number | null = null;
+  let savings_percent:        number | null = null;
+  let pricing_calc_url:       string | null = null;
+  let ram_unavailable = false;
+
+  const hasMetrics = cpu_avg_30d !== null || ram_avg_30d !== null;
+  const hasCpu     = cpu_avg_30d !== null || cpu_p95_30d !== null;
+
+  if (instance_type && catalog_data_available && hasCpu) {
+    // AWS instance with CPU data — PATH 1 or PATH 2
+    const region = instance_region ?? "us-east-1";
+    const catalogInstances = await getAllInstancesSortedByPrice(CANDIDATE_FAMILIES_V1, {}, region);
+    const prices = await getPricesForInstances(catalogInstances, region);
+    current_monthly_cost = prices[instance_type] ?? null;
+
+    if (ram_avg_30d !== null) {
+      // PATH 1: full rightsizing
+      const cpuP95 = cpu_p95_30d ?? cpu_avg_30d!;
+      const result = await suggestRightSizedInstance(cpuP95, ram_avg_30d, instance_type, prices, region);
+      suggested_instance     = result.suggested;
+      suggested_monthly_cost = prices[result.suggested] ?? null;
+      if (!result.already_right_sized && current_monthly_cost && suggested_monthly_cost) {
+        monthly_savings = Math.max(0, Math.round((current_monthly_cost - suggested_monthly_cost) * 100) / 100);
+        savings_percent = current_monthly_cost > 0
+          ? Math.max(0, Math.round((monthly_savings / current_monthly_cost) * 1000) / 10)
+          : null;
+      }
+      if (!result.already_right_sized) {
+        const regionSlug = region.toLowerCase();
+        pricing_calc_url = `https://aws.amazon.com/ec2/pricing/on-demand/?nc2=type_a#${regionSlug}`;
+      }
+    } else {
+      // PATH 2: CPU only, no RAM
+      ram_unavailable = true;
+    }
+  } else if (instance_type && catalog_data_available && !hasMetrics) {
+    // PATH 3: instance known but no metrics — just get the price
+    const region = instance_region ?? "us-east-1";
+    current_monthly_cost = await getInstanceOnDemandPrice(instance_type, region);
+  }
+  // PATH 4 (no instance_type + metrics) and PATH 5 (no metrics) need no pricing calls
+
+  // ── Efficiency label + score ──────────────────────────────────────────────
+  const efficiency_label = computeEfficiencyLabel(cpu_p95_30d, cpu_avg_30d, ram_avg_30d, disk_avg_30d);
+
+  const cpu_for_score = cpu_avg_30d ?? cpu_p95_30d;
+  let efficiency_score: number | null = null;
+  if (cpu_for_score !== null && ram_avg_30d !== null) {
+    efficiency_score = Math.min(100, Math.max(0, Math.round((cpu_for_score + ram_avg_30d) / 2)));
+  } else if (cpu_for_score !== null) {
+    efficiency_score = Math.min(100, Math.max(0, Math.round(cpu_for_score)));
+  }
+
+  // ── Recommendation ────────────────────────────────────────────────────────
+  const recommendation = buildRecommendation(
+    efficiency_label, cpu_avg_30d, cpu_p95_30d, ram_avg_30d, disk_avg_30d,
+    network_in_avg_30d, network_out_avg_30d,
+    instance_type, host_subtype,
+    current_monthly_cost, suggested_instance, suggested_monthly_cost, monthly_savings,
+    ram_unavailable
+  );
+
+  return {
+    host_name,
+    cloud_provider,
+    host_subtype,
+    cpu_avg_30d,
+    cpu_p95_30d,
+    ram_avg_30d,
+    network_in_avg_30d,
+    network_out_avg_30d,
+    disk_avg_30d,
+    instance_type,
+    instance_region,
+    instance_cpu_count,
+    instance_ram_gb,
+    has_instance_tag: instance_type !== null,
+    catalog_data_available,
+    current_monthly_cost,
+    suggested_instance,
+    suggested_monthly_cost,
+    monthly_savings,
+    savings_percent,
+    pricing_calc_url,
+    efficiency_score,
+    efficiency_label,
+    recommendation,
+    analyzed_at: new Date().toISOString(),
+  };
+}
 
 export function createHostBatchServer(
   tenantId: string,
   runId: string,
   batchIndex: number,
   totalBatches: number,
-  batchSize: number
+  _batchSize: number
 ) {
   return createSdkMcpServer({
     name: "host-batch-tools",
     version: "1.0.0",
     tools: [
+      // ── PRIMARY TOOL: process entire batch end-to-end ─────────────────────
       tool(
-        "get_prefetched_metrics_tool",
-        "Look up pre-fetched org-wide metric data for a single host. Call this FIRST before any get_datadog_metric calls — it returns all available T1 and T2 metrics from the bulk pre-fetch. Every host in this batch is guaranteed to be in the cache (the pre-fetch used explicit host-scoped queries covering the full host list). If a metric value is null it means that metric had no data for this host in Datadog (e.g. no agent installed, integration not active) — not a cache miss.",
+        "process_batch_tool",
+        "Process ALL hosts in this batch end-to-end: fetch metrics+metadata from cache, classify each host, compute right-sizing, write all results to DynamoDB, update progress. Call this ONCE with the full host list. Returns a summary of what was written.",
+        {
+          host_names: z.array(z.string()).describe("All host names in this batch — pass the complete list"),
+        },
+        async ({ host_names }) => {
+          const label = `batch ${batchIndex + 1}/${totalBatches}`;
+          console.log(`[process_batch:${tenantId}:${label}] Processing ${host_names.length} hosts`);
+
+          // Fetch all metrics + metadata in parallel
+          const hostData = await Promise.all(host_names.map(async (host_name) => {
+            const [metrics, meta] = await Promise.all([
+              getHostMetricsFromCache(tenantId, runId, host_name),
+              getHostMetadataFromCache(tenantId, runId, host_name),
+            ]);
+            return { host_name, metrics: metrics as HostMetrics | null, meta: meta as CachedMeta | null };
+          }));
+
+          // Process all hosts in parallel
+          const results = await Promise.all(hostData.map(async ({ host_name, metrics, meta }) => {
+            try {
+              const result = await processOneHost(host_name, metrics, meta, tenantId, runId);
+              await writeHostResult(tenantId, runId, host_name, result as unknown as Record<string, unknown>);
+              return { host_name, ok: true, label: result.efficiency_label };
+            } catch (err) {
+              console.error(`[process_batch:${tenantId}:${label}] Failed ${host_name}:`, err);
+              return { host_name, ok: false, label: "unknown" };
+            }
+          }));
+
+          // Update progress
+          const done = results.filter(r => r.ok).length;
+          await updateRunProgress(runId, tenantId, done,
+            `${label} complete (${done}/${host_names.length} hosts) for ${tenantId}`);
+
+          const byLabel = results.reduce((acc, r) => {
+            acc[r.label] = (acc[r.label] ?? 0) + 1;
+            return acc;
+          }, {} as Record<string, number>);
+
+          const summary = { processed: host_names.length, written: done, failed: host_names.length - done, by_label: byLabel };
+          console.log(`[process_batch:${tenantId}:${label}] Done:`, JSON.stringify(summary));
+          return { content: [{ type: "text" as const, text: JSON.stringify(summary) }] };
+        }
+      ),
+
+      // ── FALLBACK: search Datadog directly for a single host (rare cache miss) ──
+      tool(
+        "search_datadog_hosts_fallback_tool",
+        "ONLY call this when the pre-fetched cache has no data for a host AND you need its metadata. Fetches classification metadata for a single host directly from Datadog.",
         { host_name: z.string() },
         async ({ host_name }) => {
-          const metrics = await getHostMetricsFromCache(tenantId, runId, host_name);
-          return {
-            content: [{
-              type: "text" as const,
-              text: JSON.stringify({ host_name, metrics }),
-            }],
-          };
-        }
-      ),
-      tool(
-        "get_instance_specs_tool",
-        "Get CPU count (vcpu) and RAM GB for an AWS EC2 instance type from the live AWS catalog. Returns { vcpu, ram_gb, instance_type }. NOTE: Only works for AWS EC2 instance types (e.g. m5.large, t3.medium, c5.xlarge). For Azure (Standard_*) or GCP (n1-/n2-/e2-) instance types, returns catalog_not_available=true — skip the Azure/GCP RAM formula and go directly to suggest_universal_rightsizing_tool.",
-        { instance_type: z.string(), region: z.string().default("us-east-1") },
-        async ({ instance_type, region }) => {
-          // Detect Azure/GCP instance types before hitting the AWS catalog
-          const isAzure = /^Standard_/i.test(instance_type);
-          const isGcp = /^(n1|n2|n2d|e2|c2|c2d|m1|m2|a2|t2d)-/i.test(instance_type);
-          if (isAzure || isGcp) {
-            return {
-              content: [{
-                type: "text" as const,
-                text: JSON.stringify({
-                  catalog_not_available: true,
-                  reason: `${instance_type} is an ${isAzure ? "Azure" : "GCP"} instance type — not in the AWS catalog. Use suggest_universal_rightsizing_tool for this host.`,
-                }),
-              }],
-            };
+          const tenants = getTenants();
+          const tenant = tenants.find(t => t.tenant_id === tenantId);
+          if (!tenant) {
+            return { content: [{ type: "text" as const, text: JSON.stringify({ found: false, host_name, error: "Tenant not found" }) }] };
           }
+          const site = tenant.dd_site ?? "datadoghq.com";
+          const mcpUrl = (DD_MCP_BASE[site] ?? DD_MCP_BASE["datadoghq.com"]) + "?toolsets=core";
 
-          const specs = await getInstanceSpecs(instance_type, region);
-          const text = specs
-            ? JSON.stringify(specs)
-            : JSON.stringify({
-                catalog_not_available: true,
-                reason: `${instance_type} not found in AWS catalog for ${region}. Use suggest_universal_rightsizing_tool for this host.`,
-              });
-          return { content: [{ type: "text" as const, text }] };
-        }
-      ),
-      tool(
-        "get_instance_on_demand_price_tool",
-        "Get monthly on-demand price (USD) for a known instance type when NO cpu/ram metrics are available (PATH 3). Call this to populate current_monthly_cost when the host has an instance_type tag but no utilization data.",
-        { instance_type: z.string(), region: z.string().default("us-east-1") },
-        async ({ instance_type, region }) => {
-          const price = await getInstanceOnDemandPrice(instance_type, region);
-          const text = price !== null
-            ? JSON.stringify({ monthly_usd: price })
-            : JSON.stringify({ error: `Price unavailable for ${instance_type} in ${region}` });
-          return { content: [{ type: "text" as const, text }] };
-        }
-      ),
-      tool(
-        "suggest_right_sized_instance_tool",
-        "Use this tool when instance_type IS known AND it is an AWS EC2 type (e.g. t2.medium, m5a.large, c5.xlarge, r5.2xlarge). ALWAYS call this instead of suggest_universal_rightsizing_tool when you have an AWS instance_type. Returns the best-fit replacement instance with live pricing, monthly savings, and current cost. cpu_p95_pct: 95th percentile CPU % (0-100) — pass null if no CPU data available. ram_avg_pct: average RAM used as % of current instance total RAM (0-100) — pass null if RAM data is unavailable. If both are null (PATH 3 — no metrics), the tool returns catalog_not_available or current_monthly_usd so you can populate current_monthly_cost. NOTE: If the instance_type is Azure (e.g. Standard_D2s_v3) or GCP (e.g. n2-standard-4), this tool will return catalog_not_available=true — in that case use suggest_universal_rightsizing_tool instead.",
-        {
-          cpu_p95_pct: z.number().nullable(),
-          ram_avg_pct: z.number().nullable(),
-          current_instance: z.string(),
-          region: z.string().default("us-east-1"),
-        },
-        async ({ cpu_p95_pct, ram_avg_pct, current_instance, region }) => {
-          const catalogInstances = await getAllInstancesSortedByPrice(CANDIDATE_FAMILIES_V1, {}, region);
-          const prices = await getPricesForInstances(catalogInstances, region);
+          try {
+            const initResp = await fetch(mcpUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "DD-API-KEY": tenant.dd_api_key,
+                "DD-APPLICATION-KEY": tenant.dd_app_key,
+              },
+              body: JSON.stringify({ jsonrpc: "2.0", id: 0, method: "initialize",
+                params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "finops-agent", version: "1.0" } } }),
+            });
+            if (!initResp.ok) throw new Error(`MCP init failed: ${initResp.status}`);
+            const sessionId = initResp.headers.get("mcp-session-id") ?? "";
 
-          // If the current instance isn't in the AWS catalog, it's Azure/GCP — signal the agent
-          const currentPrice = prices[current_instance] ?? null;
-          if (currentPrice === null && !catalogInstances.includes(current_instance)) {
-            return {
-              content: [{
-                type: "text" as const,
-                text: JSON.stringify({
-                  catalog_not_available: true,
-                  reason: `${current_instance} is not an AWS EC2 instance type — no AWS catalog entry found. Use suggest_universal_rightsizing_tool for this host instead.`,
-                }),
-              }],
-            };
-          }
-
-          // PATH 3: both cpu and ram are null — no metrics at all, just return current price
-          if (cpu_p95_pct === null && ram_avg_pct === null) {
-            return {
-              content: [{
-                type: "text" as const,
-                text: JSON.stringify({
-                  no_metrics: true,
-                  message: "No utilization metrics available — PATH 3: use get_instance_on_demand_price_tool for current_monthly_cost and write PATH 3 recommendation",
-                  current_monthly_usd: currentPrice,
-                }),
-              }],
-            };
-          }
-
-          // If RAM data is unavailable but CPU is present, signal PATH 2 (universal rightsizing)
-          if (ram_avg_pct === null) {
-            return {
-              content: [{
-                type: "text" as const,
-                text: JSON.stringify({
-                  ram_unavailable: true,
-                  message: "RAM data unavailable — use PATH 2: call suggest_universal_rightsizing_tool with ram_avg_pct=null",
-                  current_monthly_usd: currentPrice,
-                }),
-              }],
-            };
-          }
-
-          const result = await suggestRightSizedInstance(cpu_p95_pct!, ram_avg_pct, current_instance, prices, region);
-          const suggestedPrice = prices[result.suggested] ?? null;
-          let monthlySavings = 0;
-          let savingsPct = 0;
-          if (currentPrice && suggestedPrice && !result.already_right_sized) {
-            // Floor at 0 — never report negative savings (upgrade recommendations have 0 savings)
-            monthlySavings = Math.max(0, Math.round((currentPrice - suggestedPrice) * 100) / 100);
-            savingsPct = currentPrice > 0 ? Math.max(0, Math.round((monthlySavings / currentPrice) * 1000) / 10) : 0;
-          }
-          return {
-            content: [{
-              type: "text" as const,
-              text: JSON.stringify({
-                suggested: result.suggested,
-                already_right_sized: result.already_right_sized,
-                suggested_monthly_usd: suggestedPrice,
-                current_monthly_usd: currentPrice,
-                monthly_savings: monthlySavings,
-                savings_percent: savingsPct,
-              }),
-            }],
-          };
-        }
-      ),
-      tool(
-        "build_pricing_calculator_url_tool",
-        "Build an AWS Pricing Calculator URL for comparing current vs. suggested instance.",
-        { current_instance: z.string(), suggested_instance: z.string(), region: z.string().default("us-east-1") },
-        async ({ current_instance, suggested_instance, region }) => {
-          // Build a URL that pre-selects the suggested instance in the AWS calculator
-          // The AWS calculator doesn't support deep-linking to specific comparisons via query params,
-          // but we can build a useful search URL pointing to the EC2 pricing page for the region
-          const regionSlug = region.toLowerCase().replace(/-/g, "-");
-          const url = `https://aws.amazon.com/ec2/pricing/on-demand/?nc2=type_a#${regionSlug}`;
-          const text = JSON.stringify({
-            pricing_calc_url: url,
-            note: `Compare ${current_instance} vs ${suggested_instance} in ${region} on the AWS EC2 On-Demand pricing page`,
-          });
-          return { content: [{ type: "text" as const, text }] };
-        }
-      ),
-      tool(
-        "suggest_universal_rightsizing_tool",
-        "Use this tool for: (1) hosts where instance_type is NULL (on-prem, bare-metal, untagged), (2) Azure or GCP instances where suggest_right_sized_instance_tool returns catalog_not_available=true, (3) AWS hosts where RAM data is unavailable (PATH 2). Generates a utilization-based recommendation without requiring an AWS catalog entry.",
-        {
-          host_name: z.string(),
-          cpu_avg_pct: z.number().nullable(),
-          cpu_p95_pct: z.number().nullable(),
-          ram_avg_pct: z.number().nullable(),
-          disk_avg_pct: z.number().nullable(),
-          network_in_avg_30d: z.number().nullable(),
-          network_out_avg_30d: z.number().nullable(),
-          instance_cpu_count: z.number().nullable(),
-          instance_ram_gb: z.number().nullable(),
-          cloud_provider: z.string().default("unknown"),
-        },
-        async ({ host_name, cpu_avg_pct, cpu_p95_pct, ram_avg_pct, disk_avg_pct,
-                  network_in_avg_30d, network_out_avg_30d,
-                  instance_cpu_count, instance_ram_gb, cloud_provider }) => {
-
-          // p95 is primary for right-sizing labeling; avg is fallback
-          const cpu = cpu_p95_pct ?? cpu_avg_pct;
-          // avg is used for recommendation text reporting
-          const cpu_display = cpu_avg_pct ?? cpu_p95_pct;
-          const ram = ram_avg_pct;
-          const disk = disk_avg_pct;
-
-          // Determine efficiency label — CPU, RAM, and disk all factor in
-          // Network throughput is informational only (high traffic ≠ under-provisioned)
-          let label: string;
-          if (cpu === null && ram === null && disk === null) {
-            label = "unknown";
-          } else if ((cpu ?? 0) > 80 || (ram ?? 0) > 85 || (disk ?? 0) > 85) {
-            label = "under-provisioned";
-          } else if ((cpu ?? 100) < 20 && (ram ?? 100) < 40) {
-            label = "over-provisioned";
-          } else {
-            label = "right-sized";
-          }
-
-          // Build recommendation sentence — use avg for display (more intuitive), p95 drives the label
-          const parts: string[] = [];
-
-          if (cpu_display !== null) parts.push(`CPU averaged ${cpu_display.toFixed(1)}%`);
-          if (cpu_p95_pct !== null) parts.push(`p95 ${cpu_p95_pct.toFixed(1)}%`);
-          if (ram !== null) parts.push(`RAM averaged ${ram.toFixed(1)}%`);
-          if (disk_avg_pct !== null) parts.push(`disk at ${disk_avg_pct.toFixed(1)}%`);
-
-          let action = "";
-          if (label === "over-provisioned") {
-            const suggestions: string[] = [];
-            // Use p95 for sizing math — don't size below peak
-            const cpuForSizing = cpu_p95_pct ?? cpu_avg_pct;
-            if (cpuForSizing !== null && cpuForSizing < 20 && instance_cpu_count && instance_cpu_count > 1) {
-              const suggestedCpu = Math.max(2, Math.ceil(instance_cpu_count * (cpuForSizing / 100) * 1.5));
-              suggestions.push(`reduce vCPUs from ${instance_cpu_count} to ~${suggestedCpu} (based on 30-day p95 with 1.5× headroom)`);
+            const callResp = await fetch(mcpUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "DD-API-KEY": tenant.dd_api_key,
+                "DD-APPLICATION-KEY": tenant.dd_app_key,
+                "mcp-session-id": sessionId,
+              },
+              body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call",
+                params: { name: "search_datadog_hosts",
+                  arguments: { query: `filter:"host:${host_name}"`, start_at: 0, max_tokens: 10000 } } }),
+            });
+            if (!callResp.ok) throw new Error(`MCP call failed: ${callResp.status}`);
+            const data = await callResp.json() as { result?: { content?: Array<{ text: string }> } };
+            const text = data.result?.content?.[0]?.text ?? "";
+            const row = parseTsvRow(text, host_name);
+            if (!row) {
+              return { content: [{ type: "text" as const, text: JSON.stringify({ found: false, host_name }) }] };
             }
-            if (ram !== null && ram < 40 && instance_ram_gb && instance_ram_gb > 1) {
-              const suggestedRam = Math.max(1, Math.ceil(instance_ram_gb * (ram / 100) * 1.5));
-              suggestions.push(`reduce RAM from ${instance_ram_gb.toFixed(0)} GB to ~${suggestedRam} GB`);
+            let tags: string[] = [];
+            const rawTags = row["tags"] ?? "";
+            if (rawTags.trim().startsWith("[")) {
+              try { tags = JSON.parse(rawTags); } catch { tags = []; }
+            } else if (rawTags.trim()) {
+              tags = rawTags.split(/\s+/).map(s => s.trim()).filter(Boolean);
             }
-            if (suggestions.length > 0) {
-              action = `over-provisioned; consider ${suggestions.join(" and ")} to match actual usage`;
-            } else {
-              action = `over-provisioned; consider downsizing to match actual usage`;
-            }
-          } else if (label === "under-provisioned") {
-            const concerns: string[] = [];
-            if (cpu !== null && cpu > 80) concerns.push(`CPU p95 at ${cpu.toFixed(1)}%`);
-            if (ram !== null && ram > 85) concerns.push(`RAM at ${ram.toFixed(1)}%`);
-            if (disk !== null && disk > 85) concerns.push(`disk at ${disk.toFixed(1)}%`);
-            action = `under-provisioned; ${concerns.join(" and ")} — consider scaling up to avoid performance issues`;
-          } else if (label === "right-sized") {
-            action = `right-sized for current workload`;
-          } else {
-            action = `insufficient metric data to make a recommendation`;
+            const sourcesRaw = row["sources"] ?? "";
+            const apps = sourcesRaw ? sourcesRaw.split(",").map(s => s.trim()).filter(Boolean) : [];
+            return { content: [{ type: "text" as const, text: JSON.stringify({
+              found: true, host_name,
+              hostname_aliases: row["hostname_aliases"] ? row["hostname_aliases"].split(",").map(s => s.trim()).filter(Boolean) : [],
+              tags, apps,
+              instance_type: row["instance_type"] || null,
+              cloud_provider: row["cloud_provider"] || null,
+            }) }] };
+          } catch (err) {
+            return { content: [{ type: "text" as const, text: JSON.stringify({ found: false, host_name, error: String(err) }) }] };
           }
-
-          const metricSummary = parts.length > 0 ? parts.join(", ") : "no utilization data available";
-          const recommendation = `${metricSummary} over 30 days — ${action}.`;
-
-          // Suggested resource targets — use p95 for sizing math
-          const cpuForSizing = cpu_p95_pct ?? cpu_avg_pct;
-          const suggestedCpuCount = (cpuForSizing !== null && instance_cpu_count && label === "over-provisioned")
-            ? Math.max(2, Math.ceil(instance_cpu_count * (cpuForSizing / 100) * 1.5))
-            : null;
-          const suggestedRamGb = (ram !== null && instance_ram_gb && label === "over-provisioned")
-            ? Math.max(1, Math.ceil(instance_ram_gb * (ram / 100) * 1.5))
-            : null;
-
-          return {
-            content: [{
-              type: "text" as const,
-              text: JSON.stringify({
-                efficiency_label: label,
-                recommendation,
-                suggested_cpu_count: suggestedCpuCount,
-                suggested_ram_gb: suggestedRamGb,
-                cloud_provider,
-              }),
-            }],
-          };
-        }
-      ),
-      tool(
-        "write_host_result_tool",
-        "Write a per-host analysis result to DynamoDB. IMPORTANT: Pass dd_host_metadata as the raw JSON object returned by search_datadog_hosts for this host (the row with hostname, instance_type, cloud_provider, hostname_aliases, tags). The server extracts instance_type and cloud_provider directly from Datadog metadata — values in result_json for these fields are used only as fallback when dd_host_metadata is absent.",
-        {
-          host_id: z.string(),
-          result_json: z.string(),
-          dd_host_metadata: z.string().optional().describe("Raw JSON of the search_datadog_hosts row for this host: {hostname, instance_type, cloud_provider, hostname_aliases, tags, sources}. Pass this so the server can extract instance_type authoritatively from Datadog."),
-        },
-        async ({ host_id, result_json, dd_host_metadata }) => {
-          const raw = JSON.parse(result_json) as Record<string, unknown>;
-
-          // ── Parse Datadog metadata if provided — authoritative source for instance_type ──
-          let ddMeta: Record<string, string> = {};
-          if (dd_host_metadata) {
-            try { ddMeta = JSON.parse(dd_host_metadata) as Record<string, string>; } catch { /* ignore */ }
-          }
-
-          // ── Normalize field names to canonical schema ──────────────────────
-          // Agents frequently use variant names — map them all to the canonical keys.
-          const n = (key: string, ...aliases: string[]): unknown => {
-            if (raw[key] !== undefined) return raw[key];
-            for (const a of aliases) if (raw[a] !== undefined) return raw[a];
-            return null;
-          };
-
-          const cpu_avg   = n("cpu_avg_30d",  "cpu_avg_pct",  "cpu_avg")   as number | null;
-          const cpu_p95   = n("cpu_p95_30d",  "cpu_p95_pct",  "cpu_p95")   as number | null;
-          const ram_avg   = n("ram_avg_30d",  "ram_avg_pct",  "ram_avg")   as number | null;
-          const net_in    = n("network_in_avg_30d",  "net_in_avg",  "network_in",  "network_in_bytes_day")  as number | null;
-          const net_out   = n("network_out_avg_30d", "net_out_avg", "network_out", "network_out_bytes_day") as number | null;
-          const disk_avg  = n("disk_avg_30d", "disk_avg_pct", "disk_avg")  as number | null;
-
-          // ── Recover metrics from recommendation text when agent omitted them from JSON ──
-          // Pattern: "CPU averaged X%" and "RAM averaged Y%" appear in the recommendation
-          // but the agent passed null for cpu_avg_30d / ram_avg_30d in the result JSON.
-          const rec_text = (n("recommendation") as string | null) ?? "";
-          const recCpuMatch = rec_text.match(/CPU averaged ([\d.]+)%/i);
-          const recRamMatch = rec_text.match(/RAM averaged ([\d.]+)%/i);
-          const recCpuP95Match = rec_text.match(/p95[:\s]+([\d.]+)%/i) ?? rec_text.match(/\(p95[:\s]+([\d.]+)%\)/i);
-          // Recover p95 from recommendation text: "CPU p95 at X%" pattern
-          const recCpuP95AtMatch = rec_text.match(/CPU p95 at ([\d.]+)%/i);
-          const cpu_avg_final   = cpu_avg   ?? (recCpuMatch   ? parseFloat(recCpuMatch[1])   : null);
-          const cpu_p95_final   = cpu_p95   ?? (recCpuP95Match ? parseFloat(recCpuP95Match[1]) : null)
-                                            ?? (recCpuP95AtMatch ? parseFloat(recCpuP95AtMatch[1]) : null);
-          const ram_avg_final   = ram_avg   ?? (recRamMatch   ? parseFloat(recRamMatch[1])   : null);
-
-          // p95 is primary for right-sizing labeling (captures peak load); avg is fallback
-          const cpu_for_label = cpu_p95_final ?? cpu_avg_final;
-          // avg is primary for efficiency score (reporting); p95 is fallback
-          const cpu_for_score = cpu_avg_final ?? cpu_p95_final;
-
-          // Efficiency label — ALWAYS recompute from actual metric data (never trust agent's value blindly)
-          // Rules (applied in order):
-          //   1. cpu_p95 > 80 OR ram > 85 OR disk > 85  → under-provisioned
-          //   2. cpu_p95 < 20 AND ram < 40               → over-provisioned
-          //   3. any metric data present                  → right-sized
-          //   4. all null                                 → unknown
-          let efficiency_label: string;
-          if (cpu_for_label !== null || ram_avg_final !== null || disk_avg !== null) {
-            if ((cpu_for_label ?? 0) > 80 || (ram_avg_final ?? 0) > 85 || (disk_avg ?? 0) > 85) {
-              efficiency_label = "under-provisioned";
-            } else if ((cpu_for_label ?? 100) < 20 && (ram_avg_final ?? 100) < 40) {
-              efficiency_label = "over-provisioned";
-            } else {
-              efficiency_label = "right-sized";
-            }
-          } else {
-            efficiency_label = "unknown";
-          }
-
-          // Efficiency score — use cpu_avg for reporting (avg reflects sustained load).
-          // Compute from both cpu+ram when available; fall back to cpu alone when ram is null
-          // (common for AWS CloudWatch, Azure/GCP without agent). Never null when cpu is available.
-          let efficiency_score = n("efficiency_score") as number | null;
-          if (efficiency_score === null) {
-            if (cpu_for_score !== null && ram_avg_final !== null) {
-              efficiency_score = Math.min(100, Math.max(0, Math.round((cpu_for_score + ram_avg_final) / 2)));
-            } else if (cpu_for_score !== null) {
-              // RAM unavailable — score from CPU alone (clearly noted in recommendation)
-              efficiency_score = Math.min(100, Math.max(0, Math.round(cpu_for_score)));
-            }
-          }
-
-          // Instance type — authoritative source is Datadog metadata (dd_host_metadata).
-          // ddMeta.instance_type is what Datadog's own catalog says — never hallucinated.
-          // Fallback to result_json only when dd_host_metadata was not passed.
-          // Also check tags for "instance-type:<value>" as a secondary Datadog source.
-          let instance_type: string | null = null;
-          if (ddMeta.instance_type && ddMeta.instance_type.trim()) {
-            // Datadog metadata column — most authoritative
-            instance_type = ddMeta.instance_type.trim();
-          } else if (ddMeta.tags) {
-            // Parse instance-type tag from Datadog tags array (format: ["key:value", ...])
-            try {
-              const tags = typeof ddMeta.tags === "string" ? JSON.parse(ddMeta.tags) : ddMeta.tags;
-              const tagArray: string[] = Array.isArray(tags) ? tags : Object.values(tags as Record<string, string>);
-              const instanceTypeTag = tagArray.find((t: string) => t.startsWith("instance-type:"));
-              if (instanceTypeTag) {
-                const val = instanceTypeTag.split(":").slice(1).join(":").trim();
-                if (val) instance_type = val;
-              }
-            } catch { /* ignore */ }
-          }
-          // Only fall back to agent-provided value when no Datadog metadata was passed at all
-          if (instance_type === null && !dd_host_metadata) {
-            instance_type = (n("instance_type", "current_instance") as string | null)?.trim() || null;
-          }
-          const has_instance_tag = instance_type !== null;
-
-          // Cloud provider — prefer Datadog metadata, then result_json, then region inference
-          const ddCloudProvider = ddMeta.cloud_provider?.trim() || null;
-          const rawProvider = ddCloudProvider
-            ?? (n("cloud_provider") as string | null)
-            ?? (String(n("region","instance_region") ?? "").match(/^(us|eu|ap|sa|ca|me|af)-[a-z]+-\d+/) ? "aws" : null)
-            ?? "unknown";
-
-          const providerNormMap: Record<string, string> = {
-            // Confirmed on-prem variants (positive vsphere/vmware evidence)
-            "on-premise": "on-prem",
-            "on-premises": "on-prem",
-            "onprem": "on-prem",
-            "on_prem": "on-prem",
-            "bare-metal": "on-prem",
-            "baremetal": "on-prem",
-            "vmware": "on-prem",
-            // Hybrid/ambiguous variants → "unknown" (agent couldn't confirm on-prem, no positive evidence)
-            // "No cloud tags" does NOT mean on-prem — these must stay "unknown"
-            "on-prem/unknown": "unknown",
-            "unknown/on-prem": "unknown",
-            "unknown (on-prem)": "unknown",
-            "unknown (on-prem/untagged)": "unknown",
-            "unknown (on-prem/bare-metal)": "unknown",
-            "on-prem/untagged": "unknown",
-            "untagged": "unknown",
-          };
-          let cloud_provider = providerNormMap[rawProvider.toLowerCase()] ?? rawProvider;
-          // Final safety net: if still not canonical, force to "unknown"
-          const canonicalProviders = new Set(["aws", "azure", "gcp", "on-prem", "unknown"]);
-          if (!canonicalProviders.has(cloud_provider)) {
-            cloud_provider = "unknown";
-          }
-
-          // Monetary fields — normalize variant names
-          const current_monthly_cost   = n("current_monthly_cost",   "current_monthly_usd",   "current_cost")   as number | null;
-          const suggested_monthly_cost = n("suggested_monthly_cost",  "suggested_monthly_usd", "suggested_cost") as number | null;
-          const monthly_savings        = n("monthly_savings",         "monthly_savings_usd")                     as number | null;
-          // Recover savings_percent from monthly_savings / current_monthly_cost when agent omitted it
-          const raw_savings_percent    = n("savings_percent",         "savings_pct")                             as number | null;
-          const savings_percent = raw_savings_percent !== null
-            ? Math.max(0, raw_savings_percent)
-            : (monthly_savings != null && current_monthly_cost != null && current_monthly_cost > 0)
-              ? Math.max(0, Math.round((monthly_savings / current_monthly_cost) * 1000) / 10)
-              : null;
-
-          // Recommendation — reject keyword-only responses, require a proper sentence (≥10 words)
-          let recommendation = n("recommendation") as string | null;
-          if (recommendation && recommendation.trim().split(/\s+/).length < 10) {
-            // Agent wrote a keyword like "DOWNSIZE" or a stub like "No data found." — discard it
-            recommendation = null;
-          }
-
-          // Synthesize a fallback recommendation when agent left it blank but we have metric data
-          if (!recommendation || recommendation.trim() === "") {
-            const parts: string[] = [];
-            if (cpu_avg_final !== null) parts.push(`CPU averaged ${cpu_avg_final.toFixed(1)}%`);
-            if (cpu_p95_final !== null) parts.push(`p95 ${cpu_p95_final.toFixed(1)}%`);
-            if (ram_avg_final !== null) parts.push(`RAM averaged ${ram_avg_final.toFixed(1)}%`);
-            if (disk_avg !== null) parts.push(`disk at ${disk_avg.toFixed(1)}%`);
-
-            if (parts.length > 0) {
-              const metricSummary = parts.join(", ");
-              const instanceNote = (n("instance_type","current_instance") as string | null)
-                ? ` on ${n("instance_type","current_instance") as string}`
-                : "";
-              if (efficiency_label === "over-provisioned") {
-                recommendation = `${metricSummary} over 30 days${instanceNote} — over-provisioned; consider downsizing to reduce costs.`;
-              } else if (efficiency_label === "under-provisioned") {
-                recommendation = `${metricSummary} over 30 days${instanceNote} — under-provisioned; consider scaling up to avoid performance issues.`;
-              } else if (efficiency_label === "right-sized") {
-                recommendation = `${metricSummary} over 30 days${instanceNote} — right-sized for current workload.`;
-              } else {
-                recommendation = `${metricSummary} over 30 days${instanceNote} — insufficient data for a definitive recommendation.`;
-              }
-            } else {
-              recommendation = "No metric data available for this host over the 30-day window. Host may be stopped, terminated, or neither the Datadog agent nor a cloud integration is configured.";
-            }
-          }
-
-          const canonical: Record<string, unknown> = {
-            host_name:              n("host_name", "hostname") ?? host_id,
-            cloud_provider,
-            host_subtype:           n("host_subtype") ?? null,
-            cpu_avg_30d:            cpu_avg_final,
-            cpu_p95_30d:            cpu_p95_final,
-            ram_avg_30d:            ram_avg_final,
-            network_in_avg_30d:     net_in,
-            network_out_avg_30d:    net_out,
-            disk_avg_30d:           disk_avg,
-            instance_type,
-            instance_region:        n("instance_region", "region") ?? null,
-            instance_cpu_count:     n("instance_cpu_count", "vcpu", "cpu_count") ?? null,
-            instance_ram_gb:        n("instance_ram_gb", "ram_gb", "ram_total_gb", "mem_total_gb") ?? null,
-            has_instance_tag,
-            catalog_data_available: n("catalog_data_available") ?? (current_monthly_cost !== null ? true : false),
-            current_monthly_cost,
-            suggested_instance:     n("suggested_instance") ?? null,
-            suggested_monthly_cost,
-            monthly_savings,
-            savings_percent,
-            pricing_calc_url:       n("pricing_calc_url") ?? null,
-            efficiency_score,
-            efficiency_label,
-            recommendation,
-            analyzed_at:            new Date().toISOString(),
-          };
-
-          // PATH 3 enforcement: AWS host with instance_type but no metrics MUST have current_monthly_cost
-          // The prompt says get_instance_on_demand_price_tool is MANDATORY in this case.
-          // Reject the write and force the agent to call it first.
-          const hasInstanceType = !!(n("instance_type","current_instance") as string | null);
-          const hasNoMetrics = cpu_avg_final === null && ram_avg_final === null;
-          if (cloud_provider === "aws" && hasInstanceType && hasNoMetrics && current_monthly_cost === null) {
-            const instanceType = n("instance_type","current_instance") as string;
-            return {
-              content: [{
-                type: "text" as const,
-                text: JSON.stringify({
-                  error: "PATH 3 VIOLATION: AWS host with instance_type but no metrics requires current_monthly_cost.",
-                  action_required: `Call get_instance_on_demand_price_tool(instance_type="${instanceType}", region="us-east-1") first, then retry write_host_result_tool with current_monthly_cost populated.`,
-                }),
-              }],
-            };
-          }
-
-          await writeHostResult(tenantId, runId, host_id, canonical);
-          return { content: [{ type: "text" as const, text: `Wrote result for host ${host_id}` }] };
-        }
-      ),
-      tool(
-        "update_run_progress_tool",
-        "Update run progress after completing hosts in this batch.",
-        { hosts_done: z.number(), log_message: z.string() },
-        async ({ hosts_done, log_message }) => {
-          await updateRunProgress(runId, tenantId, hosts_done, log_message);
-          return { content: [{ type: "text" as const, text: `Progress updated: ${log_message}` }] };
         }
       ),
     ],

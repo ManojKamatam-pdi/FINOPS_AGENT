@@ -1,51 +1,57 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { Options, SDKResultSuccess } from "@anthropic-ai/claude-agent-sdk";
-import { createListHostsServer } from "../mcp-servers/list-hosts-server.js";
+import { fetchAllHostsViaMcp } from "../mcp-servers/list-hosts-server.js";
+import { writeHostList, updateHostsTotal } from "../tools/dynamodb.js";
+import { writeHostMetadataCache } from "../tools/host-metadata-cache.js";
+import type { HostMetadata } from "../tools/host-metadata-cache.js";
 
+/**
+ * Fetches all hosts for a tenant from Datadog and writes them to DynamoDB.
+ * Calls the fetch function directly — no LLM agent loop needed for a single
+ * deterministic operation. Using an agent here introduced non-deterministic
+ * failures where the model would acknowledge the request without calling the tool.
+ *
+ * Also seeds the host metadata cache with memory_mib and cpu_logical_processors
+ * from the DDSQL SELECT query. These are used as fallback instance_ram_gb /
+ * instance_cpu_count in processOneHost() when the AWS pricing catalog has no entry
+ * (Azure/GCP hosts, or AWS hosts with no instance-type tag).
+ * This adds zero extra MCP calls — the data comes from the same SELECT query.
+ */
 export async function runListHostsAgent(
   tenantId: string,
   runId: string
 ): Promise<void> {
-  const localServer = createListHostsServer(tenantId, runId);
+  console.log(`[list_hosts:${tenantId}] Fetching all hosts from Datadog`);
 
-  const systemPrompt = `You are a host discovery agent for the Datadog org '${tenantId}'.
+  const hosts = await fetchAllHostsViaMcp(tenantId);
 
-You have ONE tool: fetch_and_store_all_hosts_tool
+  console.log(`[list_hosts:${tenantId}] Fetched ${hosts.length} hosts — writing to DynamoDB`);
 
-Call it once. It fetches all hosts from Datadog (handling pagination internally), writes them to DynamoDB, and updates the run total.
-After it returns successfully, stop.`;
+  await writeHostList(tenantId, runId, hosts.map(h => ({ host_id: h.host_id, host_name: h.host_name })));
+  await updateHostsTotal(runId, hosts.length);
 
-  const options: Options = {
-    systemPrompt,
-    permissionMode: "bypassPermissions",
-    tools: [],
-    maxTurns: 10,
-    mcpServers: {
-      "list-hosts-tools": localServer,
-      // No Datadog MCP needed — the tool calls the REST API directly
-    },
-  };
-
-  for await (const msg of query({
-    prompt: `Fetch and store all hosts for Datadog org '${tenantId}' by calling fetch_and_store_all_hosts_tool.`,
-    options,
-  })) {
-    if (msg.type === "assistant") {
-      const content = (msg as { message?: { content?: unknown[] } }).message?.content;
-      if (Array.isArray(content)) {
-        for (const block of content) {
-          const b = block as { type?: string; text?: string; name?: string };
-          if (b.type === "text" && b.text) console.log(`[list_hosts:${tenantId}] ${b.text.slice(0, 200)}`);
-          if (b.type === "tool_use") console.log(`[list_hosts:${tenantId}] Tool: ${b.name}`);
-        }
-      }
+  // Seed the metadata cache with hardware specs from DDSQL.
+  // runHostMetadataPrefetch (REST API) will overwrite these entries with full tag/alias data,
+  // but memory_mib and cpu_logical_processors are NOT available from the REST API — only from
+  // DDSQL. We write them here first so the merge in runHostMetadataPrefetch can preserve them.
+  const hostsWithHardware = hosts.filter(h => h.memory_mib !== null || h.cpu_logical_processors !== null);
+  if (hostsWithHardware.length > 0) {
+    const seedMap: Record<string, HostMetadata> = {};
+    for (const h of hostsWithHardware) {
+      seedMap[h.host_name] = {
+        tags: [],
+        aliases: [],
+        apps: [],
+        instance_type: null,
+        cloud_provider: null,
+        memory_mib: h.memory_mib,
+        cpu_logical_processors: h.cpu_logical_processors,
+      };
     }
-    if (msg.type === "result") {
-      const r = msg as SDKResultSuccess & { is_error?: boolean; stop_reason?: string };
-      if (r.is_error) console.error(`[list_hosts:${tenantId}] Agent run failed: ${r.result}`);
-      else console.log(`[list_hosts:${tenantId}] Completed: stop_reason=${r.stop_reason}`);
-    }
+    await writeHostMetadataCache(tenantId, runId, seedMap);
+    console.log(
+      `[list_hosts:${tenantId}] Seeded metadata cache with hardware specs for ` +
+      `${hostsWithHardware.length} hosts (memory_mib/cpu_logical_processors from DDSQL)`
+    );
   }
 
-  console.log(`[list_hosts:${tenantId}] Done`);
+  console.log(`[list_hosts:${tenantId}] Done — ${hosts.length} hosts stored`);
 }

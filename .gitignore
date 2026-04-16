@@ -12,5 +12,13 @@ worktrees/
 dist/
 build/
 .DS_Store
+dd-org-registry.json
 
-*registry.json
+.env.example
+.env.local.example
+
+test-*.ps1
+
+test-*
+
+*/user.json

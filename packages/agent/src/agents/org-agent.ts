@@ -1,12 +1,12 @@
 import { runListHostsAgent } from "./list-hosts-agent.js";
 import { runHostBatchAgent } from "./host-batch-agent.js";
 import { runSummarizeAgent } from "./summarize-agent.js";
-import { runMetricPrefetch } from "./metric-prefetch-agent.js";
+import { runMetricPrefetch, runHostMetadataPrefetch } from "./metric-prefetch-agent.js";
 import { readHostList } from "../tools/dynamodb.js";
 import { isAborted } from "../tools/abort-registry.js";
 
-const BATCH_SIZE = 15;        // 15 hosts per batch — agent processes them in parallel phases (see host-batch-agent.ts)
-const BATCH_CONCURRENCY = 30; // 30 parallel batches per wave → high throughput across large orgs
+const BATCH_SIZE = 15;       // 15 hosts per batch — process_batch_tool handles all 15 in parallel server-side
+const BATCH_CONCURRENCY = 5; // 5 concurrent batches — each batch is 2 LLM turns with tiny context, no rate limiting
 
 export async function runOrgAnalysis(
   tenantId: string,
@@ -28,21 +28,39 @@ export async function runOrgAnalysis(
     return;
   }
 
-  // ── Bulk metric pre-fetch ──────────────────────────────────────────────────
-  // Fetch all metrics org-wide in one pass before dispatching batch agents.
-  // This collapses N_hosts × 23 per-host Datadog calls into 23 org-wide calls
-  // (wildcard path for ≤1000 hosts) or chunked calls (>1000 hosts).
-  // Batch agents call get_prefetched_metrics_tool — always a cache hit.
-  // If pre-fetch fails, all hosts in this org will have efficiency_label = "unknown".
-  console.log(`[org_analysis:${tenantId}] Starting metric pre-fetch for ${hosts.length} hosts`);
-  try {
-    const { metricsStored, hostsWithData } = await runMetricPrefetch(tenantId, runId, hosts);
+  // ── Bulk pre-fetch: metrics + host metadata ────────────────────────────────
+  // Both run in parallel before batch agents start.
+  //
+  // Metric pre-fetch: collapses N_hosts × 23 per-host Datadog calls into
+  //   23 org-wide calls (≤1000 hosts) or N_chunks × 23 calls (>1000 hosts).
+  //   Batch agents call get_prefetched_metrics_tool — always a cache hit.
+  //
+  // Host metadata pre-fetch: collapses N_hosts search_datadog_hosts MCP calls
+  //   into ceil(N/1000) REST API calls (GET /api/v1/hosts, 1000/page).
+  //   Batch agents call get_prefetched_host_metadata_tool — no MCP needed for Step A.
+  //   Falls back to search_datadog_hosts only for individual cache misses (rare).
+  //
+  // If either pre-fetch fails it is non-fatal — batch agents degrade gracefully:
+  //   metric failure  → all hosts get efficiency_label = "unknown"
+  //   metadata failure → batch agents fall back to per-host search_datadog_hosts
+  console.log(`[org_analysis:${tenantId}] Starting metric + host metadata pre-fetch for ${hosts.length} hosts`);
+  const [metricResult, metadataResult] = await Promise.allSettled([
+    runMetricPrefetch(tenantId, runId, hosts),
+    runHostMetadataPrefetch(tenantId, runId),
+  ]);
+
+  if (metricResult.status === "fulfilled") {
+    const { metricsStored, hostsWithData } = metricResult.value;
     console.log(`[org_analysis:${tenantId}] Metric pre-fetch complete — ${metricsStored} metrics, ${hostsWithData} hosts with data`);
-  } catch (err) {
-    // Non-fatal but impactful: if pre-fetch fails, get_prefetched_metrics_tool returns all-null
-    // for every host, so all hosts in this org will be written with efficiency_label = "unknown".
-    // No per-host fallback exists — the batch agent relies entirely on the pre-fetched cache.
-    console.error(`[org_analysis:${tenantId}] Metric pre-fetch FAILED — all hosts will have unknown efficiency labels:`, err);
+  } else {
+    console.error(`[org_analysis:${tenantId}] Metric pre-fetch FAILED — all hosts will have unknown efficiency labels:`, metricResult.reason);
+  }
+
+  if (metadataResult.status === "fulfilled") {
+    const { hostsStored } = metadataResult.value;
+    console.log(`[org_analysis:${tenantId}] Host metadata pre-fetch complete — ${hostsStored} hosts stored`);
+  } else {
+    console.error(`[org_analysis:${tenantId}] Host metadata pre-fetch FAILED — batch agents will fall back to per-host search_datadog_hosts:`, metadataResult.reason);
   }
 
   if (isAborted(runId)) {

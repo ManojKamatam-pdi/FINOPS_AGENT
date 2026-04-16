@@ -12,13 +12,9 @@
  * Startup: creates DynamoDB tables if they don't exist, then listens.
  * Scheduler: no-op locally; EventBridge + Lambda handles nightly runs in AWS.
  */
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
-import dotenv from "dotenv";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-dotenv.config({ path: join(__dirname, "../.env.local") });  // packages/agent/.env.local
+// MUST be first — loads .env.local before any other module executes.
+// ES module imports are hoisted, so dotenv cannot run inline before other imports.
+import "./config/env.js";
 
 // Each concurrent agent query() adds a process exit listener.
 // With up to 10 batch agents + 2 orgs running in parallel, raise the limit.
@@ -29,6 +25,7 @@ import cors from "cors";
 import { createTables } from "./db/setup.js";
 import { requireAuth } from "./middleware/auth.js";
 import { apiRouter } from "./routes/api.js";
+import { sloApiRouter } from "./routes/slo-api.js";
 import { runOrchestrator } from "./agents/orchestrator.js";
 
 const app = express();
@@ -47,6 +44,8 @@ app.get("/health", (_req, res) => {
 });
 
 // REST API — Okta auth required
+// SLO router must be mounted BEFORE the general API router to avoid /api catching /api/slo/* first
+app.use("/api/slo", requireAuth, sloApiRouter);
 app.use("/api", requireAuth, apiRouter);
 
 // Internal agent trigger — kept for direct testing / backward compat

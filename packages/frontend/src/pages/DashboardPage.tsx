@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { abortRun, ConflictInfo, getResults, ResultsResponse } from '../services/api';
+import { useNavigate, Link } from 'react-router-dom';
+import { abortRun, ConflictInfo, getResults, ResultsResponse, getActiveRun, ActiveRunInfo } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import OrgSummaryCard from '../components/OrgSummaryCard';
 import HostTable from '../components/HostTable';
@@ -17,6 +17,7 @@ export default function DashboardPage() {
   const [conflict, setConflict] = useState<ConflictInfo | null>(null);
   const [abortingConflict, setAbortingConflict] = useState(false);
   const [showConflictAbortModal, setShowConflictAbortModal] = useState(false);
+  const [activeRun, setActiveRun] = useState<ActiveRunInfo | null>(null);
 
   const fetchResults = useCallback(() => {
     if (!token) return;
@@ -31,6 +32,23 @@ export default function DashboardPage() {
       })
       .finally(() => setLoading(false));
   }, [token]);
+
+  // Poll active run independently — same pattern as SloAuditPage
+  useEffect(() => {
+    if (!token) return;
+    let wasRunning = false;
+    const poll = async () => {
+      try {
+        const run = await getActiveRun(token);
+        setActiveRun(run);
+        if (!run && wasRunning) fetchResults();
+        wasRunning = !!run;
+      } catch { /* ignore */ }
+    };
+    poll();
+    const interval = setInterval(poll, 10000);
+    return () => clearInterval(interval);
+  }, [token, fetchResults]);
 
   useEffect(() => {
     fetchResults();
@@ -94,9 +112,19 @@ export default function DashboardPage() {
         </div>
       </header>
 
+      {/* Nav */}
+      <div style={{ background: 'white', borderBottom: '1px solid #e2e8f0', padding: '0 24px', display: 'flex', gap: 4 }}>
+        <Link to="/" style={{ padding: '12px 16px', fontSize: 14, color: '#0066cc', fontWeight: 600, textDecoration: 'none', borderBottom: '2px solid #0066cc' }}>
+          Infrastructure Analysis
+        </Link>
+        <Link to="/slo" style={{ padding: '12px 16px', fontSize: 14, color: '#64748b', textDecoration: 'none', borderBottom: '2px solid transparent' }}>
+          SLO Audit
+        </Link>
+      </div>
+
       <main style={{ maxWidth: 1400, margin: '0 auto', padding: '32px 24px' }}>
         {/* Active Run Banner — polls independently, visible to all users */}
-        <ActiveRunBanner onRunCompleted={handleRunCompleted} />
+        <ActiveRunBanner onRunCompleted={handleRunCompleted} onAborted={() => setActiveRun(null)} />
 
         {/* Page header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
@@ -127,7 +155,11 @@ export default function DashboardPage() {
               </select>
             )}
             <div>
-            <RunTriggerButton onRunStarted={handleRunStarted} onAlreadyRunning={handleAlreadyRunning} />
+            <RunTriggerButton
+              onRunStarted={handleRunStarted}
+              onAlreadyRunning={handleAlreadyRunning}
+              activeRun={activeRun}
+            />
 
             {/* Inline conflict message when 409 returned */}
             {conflict && (
@@ -193,7 +225,11 @@ export default function DashboardPage() {
             <p style={{ color: '#64748b', marginBottom: 24 }}>
               Run your first infrastructure analysis to see cost optimization recommendations.
             </p>
-            <RunTriggerButton onRunStarted={handleRunStarted} onAlreadyRunning={handleAlreadyRunning} />
+            <RunTriggerButton
+              onRunStarted={handleRunStarted}
+              onAlreadyRunning={handleAlreadyRunning}
+              activeRun={activeRun}
+            />
           </div>
         )}
 

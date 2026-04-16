@@ -117,25 +117,58 @@ export async function suggestRightSizedInstance(
   currentInstance: string,
   prices: Record<string, number>,
   region = "us-east-1"
-): Promise<{ suggested: string; already_right_sized: boolean }> {
+): Promise<{ suggested: string; already_right_sized: boolean; bottleneck: "cpu" | "ram" | "both" | "none" }> {
   const specs = await getRegionSpecs(region);
   const currentSpecs = specs[currentInstance];
-  if (!currentSpecs) return { suggested: currentInstance, already_right_sized: true };
+  if (!currentSpecs) return { suggested: currentInstance, already_right_sized: true, bottleneck: "none" };
 
-  const requiredVcpu = (cpuP95Pct / 100) * currentSpecs.vcpu * 1.5;
+  // Determine which dimensions are actually saturated
+  const cpuSaturated = cpuP95Pct > 80;
+  const ramSaturated = ramAvgPct > 85;
+  const bottleneck: "cpu" | "ram" | "both" | "none" =
+    cpuSaturated && ramSaturated ? "both" :
+    cpuSaturated ? "cpu" :
+    ramSaturated ? "ram" : "none";
+
+  // Required capacity with 1.5× headroom
+  const requiredVcpu  = (cpuP95Pct / 100) * currentSpecs.vcpu  * 1.5;
   const requiredRamGb = (ramAvgPct / 100) * currentSpecs.ram_gb * 1.5;
 
-  const candidates = await getAllInstancesSortedByPrice(CANDIDATE_FAMILIES_V1, prices, region);
+  // For RAM-only bottleneck: prefer memory-optimized families (r5/r6i/r7i/r6a/r5a)
+  // For CPU-only bottleneck: prefer compute-optimized families (c5/c6i/c7i/c5a/c6a)
+  // For both or none: use full candidate list sorted by price
+  const memFamilies     = ["r5", "r5a", "r6i", "r6a", "r7i"];
+  const computeFamilies = ["c5", "c5a", "c6i", "c6a", "c7i"];
 
-  for (const candidate of candidates) {
+  const preferredFamilies =
+    bottleneck === "ram"  ? memFamilies :
+    bottleneck === "cpu"  ? computeFamilies :
+    null; // null = all CANDIDATE_FAMILIES_V1
+
+  // First pass: try preferred families
+  if (preferredFamilies) {
+    const preferredCandidates = await getAllInstancesSortedByPrice(preferredFamilies, prices, region);
+    for (const candidate of preferredCandidates) {
+      const s = specs[candidate];
+      if (!s) continue;
+      if (s.vcpu >= requiredVcpu && s.ram_gb >= requiredRamGb) {
+        if (candidate === currentInstance) return { suggested: currentInstance, already_right_sized: true, bottleneck };
+        return { suggested: candidate, already_right_sized: false, bottleneck };
+      }
+    }
+  }
+
+  // Second pass (or only pass for "both"/"none"): full candidate list
+  const allCandidates = await getAllInstancesSortedByPrice(CANDIDATE_FAMILIES_V1, prices, region);
+  for (const candidate of allCandidates) {
     const s = specs[candidate];
     if (!s) continue;
     if (s.vcpu >= requiredVcpu && s.ram_gb >= requiredRamGb) {
-      if (candidate === currentInstance) return { suggested: currentInstance, already_right_sized: true };
-      return { suggested: candidate, already_right_sized: false };
+      if (candidate === currentInstance) return { suggested: currentInstance, already_right_sized: true, bottleneck };
+      return { suggested: candidate, already_right_sized: false, bottleneck };
     }
   }
-  return { suggested: currentInstance, already_right_sized: true };
+  return { suggested: currentInstance, already_right_sized: true, bottleneck };
 }
 
 export function computeEfficiencyScore(cpuAvg: number | null, ramAvg: number | null): number {

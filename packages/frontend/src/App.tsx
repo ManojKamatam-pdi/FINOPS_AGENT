@@ -6,6 +6,8 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import RunProgressPage from './pages/RunProgressPage';
+import SloAuditPage from './pages/SloAuditPage';
+import SloRunProgressPage from './pages/SloRunProgressPage';
 
 const oktaAuth = new OktaAuth({
   issuer: process.env.REACT_APP_OKTA_ISSUER || '',
@@ -29,6 +31,8 @@ function AppRoutes() {
       <Route path="/login/callback" element={<LoginCallback />} />
       <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
       <Route path="/run/:runId" element={<ProtectedRoute><RunProgressPage /></ProtectedRoute>} />
+      <Route path="/slo" element={<ProtectedRoute><SloAuditPage /></ProtectedRoute>} />
+      <Route path="/slo/run/:runId" element={<ProtectedRoute><SloRunProgressPage /></ProtectedRoute>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

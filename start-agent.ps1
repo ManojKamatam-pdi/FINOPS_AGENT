@@ -37,13 +37,6 @@ Write-Host "Building TypeScript..." -ForegroundColor Cyan
 if ($LASTEXITCODE -ne 0) { Write-Host "TypeScript build failed" -ForegroundColor Red; exit 1 }
 Write-Host "Build complete" -ForegroundColor Green
 
-# Step 3: Copy .env.local if not present
-$envSrc = "$agentDir\.env.local"
-if (-not (Test-Path $envSrc)) {
-    Copy-Item "$PSScriptRoot\packages\backend\.env.local" $envSrc -ErrorAction SilentlyContinue
-    Write-Host "Copied .env.local from backend" -ForegroundColor Yellow
-}
-
 # Step 4: Start server
 Write-Host ""
 Write-Host "Starting agent server on port 8005..." -ForegroundColor Green

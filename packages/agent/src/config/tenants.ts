@@ -15,11 +15,29 @@ export interface TenantConfig {
   enabled: boolean;
 }
 
+/** Converts a tenant_id like "PDI-Enterprise" → "PDI_ENTERPRISE" for env var lookup */
+function toEnvKey(tenantId: string): string {
+  return tenantId.toUpperCase().replace(/-/g, "_");
+}
+
+function resolveSecrets(entry: TenantConfig): TenantConfig {
+  const key = toEnvKey(entry.tenant_id);
+  const dd_api_key = process.env[`DD_API_KEY_${key}`];
+  const dd_app_key = process.env[`DD_APP_KEY_${key}`];
+
+  if (!dd_api_key) throw new Error(`Missing env var: DD_API_KEY_${key} (tenant: ${entry.tenant_id})`);
+  if (!dd_app_key) throw new Error(`Missing env var: DD_APP_KEY_${key} (tenant: ${entry.tenant_id})`);
+
+  return { ...entry, dd_api_key, dd_app_key };
+}
+
 function loadRegistry(): TenantConfig[] {
   const registryPath = join(__dirname, "../../config/dd-org-registry.json");
   const raw = readFileSync(registryPath, "utf-8");
   const entries = JSON.parse(raw) as TenantConfig[];
-  return entries.filter((e) => e.enabled);
+  return entries
+    .filter((e) => e.enabled)
+    .map(resolveSecrets);
 }
 
 let _tenants: TenantConfig[] | null = null;

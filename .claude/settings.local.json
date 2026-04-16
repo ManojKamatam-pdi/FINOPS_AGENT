@@ -42,7 +42,25 @@
       "Bash(./node_modules/.bin/tsc --noEmit)",
       "Bash(./node_modules/.bin/tsc)",
       "Bash(powershell.exe -Command \"Get-Process -Name node -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like ''*finops*'' -or $_.CommandLine -like ''*agent*'' } | Select-Object Id, CPU, StartTime\")",
-      "Bash(powershell.exe -Command \"Set-Location 'C:\\\\Users\\\\manoj.kamatam\\\\Documents\\\\FinOps_Agent\\\\packages\\\\agent'; & '.\\\\node_modules\\\\.bin\\\\tsc.cmd' --noEmit 2>&1\")"
+      "Bash(powershell.exe -Command \"Set-Location 'C:\\\\Users\\\\manoj.kamatam\\\\Documents\\\\FinOps_Agent\\\\packages\\\\agent'; & '.\\\\node_modules\\\\.bin\\\\tsc.cmd' --noEmit 2>&1\")",
+      "Bash(npx tsc:*)",
+      "mcp__plugin_serena_serena__get_current_config",
+      "mcp__plugin_serena_serena__read_file",
+      "mcp__plugin_serena_serena__check_onboarding_performed",
+      "mcp__plugin_serena_serena__find_file",
+      "mcp__plugin_serena_serena__get_symbols_overview",
+      "mcp__plugin_serena_serena__search_for_pattern",
+      "Bash(powershell.exe -Command \"Set-Location 'C:\\\\Users\\\\manoj.kamatam\\\\Documents\\\\FinOps_Agent\\\\packages\\\\frontend'; & '.\\\\node_modules\\\\.bin\\\\tsc.cmd' --noEmit 2>&1 | Select-Object -First 60\")",
+      "Bash(powershell.exe -Command \"Set-Location 'C:\\\\Users\\\\manoj.kamatam\\\\Documents\\\\FinOps_Agent\\\\packages\\\\frontend'; & '.\\\\node_modules\\\\.bin\\\\tsc.cmd' --noEmit 2>&1\")",
+      "Bash(powershell.exe -Command \"Set-Location 'C:\\\\Users\\\\manoj.kamatam\\\\Documents\\\\FinOps_Agent'; & '.\\\\node_modules\\\\.bin\\\\playwright.cmd' test 'playwright/tests/08-slo-audit.spec.ts' --reporter=line 2>&1\")",
+      "mcp__plugin_serena_serena__list_memories",
+      "Bash(powershell.exe -Command \"Select-String -Path 'C:\\\\Users\\\\manoj.kamatam\\\\Documents\\\\FinOps_Agent\\\\packages\\\\agent\\\\src\\\\agents\\\\metric-prefetch-agent.ts' -Pattern '^export async function' | Select-Object LineNumber, Line | Format-Table -AutoSize\")",
+      "Bash(powershell.exe -Command \"Select-String -Path 'C:\\\\Users\\\\manoj.kamatam\\\\Documents\\\\FinOps_Agent\\\\packages\\\\agent\\\\src\\\\mcp-servers\\\\host-batch-server.ts' -Pattern '^import|tool\\\\\\(' | Select-Object LineNumber, Line | Format-Table -AutoSize\")",
+      "Bash(powershell.exe -Command \"Select-String -Path 'C:\\\\Users\\\\manoj.kamatam\\\\Documents\\\\FinOps_Agent\\\\packages\\\\agent\\\\src\\\\db\\\\setup.ts' -Pattern 'TableName:' | Select-Object LineNumber, Line | Format-Table -AutoSize\")",
+      "Bash(powershell.exe -Command \"Select-String -Path 'C:\\\\Users\\\\manoj.kamatam\\\\Documents\\\\FinOps_Agent\\\\packages\\\\agent\\\\src\\\\tools\\\\host-metadata-cache.ts' -Pattern '^export' | Select-Object LineNumber, Line | Format-Table -AutoSize\")",
+      "mcp__plugin_serena_serena__find_symbol",
+      "Bash(powershell.exe -Command \"Set-Location 'C:\\\\Users\\\\manoj.kamatam\\\\Documents\\\\FinOps_Agent\\\\packages\\\\agent'; & node_modules\\\\.bin\\\\tsc.cmd --noEmit 2>&1\")",
+      "Bash(powershell.exe -Command \"Set-Location 'C:\\\\Users\\\\manoj.kamatam\\\\Documents\\\\FinOps_Agent'; node test-mcp-metric-call.mjs 2>&1\")"
     ]
   }
 }

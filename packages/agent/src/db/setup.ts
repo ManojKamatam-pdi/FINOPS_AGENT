@@ -104,6 +104,80 @@ const TABLE_DEFINITIONS = [
     ],
     BillingMode: "PAY_PER_REQUEST" as const,
   },
+  // ─── Metric Pre-fetch Cache ────────────────────────────────────────────────
+  {
+    TableName: "finops_metric_cache",
+    KeySchema: [
+      { AttributeName: "tenant_id", KeyType: "HASH" as const },
+      { AttributeName: "sk", KeyType: "RANGE" as const },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: "tenant_id", AttributeType: "S" as const },
+      { AttributeName: "sk", AttributeType: "S" as const },
+    ],
+    BillingMode: "PAY_PER_REQUEST" as const,
+  },
+  // ─── Host Metadata Pre-fetch Cache ────────────────────────────────────────
+  // Stores aliases, tags, apps, instance_type, cloud_provider per host.
+  // Populated by runHostMetadataPrefetch (GET /api/v1/hosts REST API).
+  // Batch agents read via get_prefetched_host_metadata_tool — no MCP needed for Step A.
+  {
+    TableName: "finops_host_metadata_cache",
+    KeySchema: [
+      { AttributeName: "tenant_id", KeyType: "HASH" as const },
+      { AttributeName: "sk", KeyType: "RANGE" as const },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: "tenant_id", AttributeType: "S" as const },
+      { AttributeName: "sk", AttributeType: "S" as const },
+    ],
+    BillingMode: "PAY_PER_REQUEST" as const,
+  },
+  // ─── SLO Audit Tables ──────────────────────────────────────────────────────
+  {
+    TableName: "finops_slo_runs",
+    KeySchema: [
+      { AttributeName: "run_id", KeyType: "HASH" as const },
+      { AttributeName: "sk", KeyType: "RANGE" as const },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: "run_id", AttributeType: "S" as const },
+      { AttributeName: "sk", AttributeType: "S" as const },
+      { AttributeName: "status", AttributeType: "S" as const },
+      { AttributeName: "started_at", AttributeType: "S" as const },
+    ],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: "status-started_at-index",
+        KeySchema: [
+          { AttributeName: "status", KeyType: "HASH" as const },
+          { AttributeName: "started_at", KeyType: "RANGE" as const },
+        ],
+        Projection: { ProjectionType: "ALL" as const },
+      },
+    ],
+    BillingMode: "PAY_PER_REQUEST" as const,
+  },
+  {
+    TableName: "finops_slo_results",
+    KeySchema: [
+      { AttributeName: "tenant_id", KeyType: "HASH" as const },
+      { AttributeName: "sk", KeyType: "RANGE" as const },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: "tenant_id", AttributeType: "S" as const },
+      { AttributeName: "sk", AttributeType: "S" as const },
+      { AttributeName: "run_id", AttributeType: "S" as const },
+    ],
+    GlobalSecondaryIndexes: [
+      {
+        IndexName: "run_id-index",
+        KeySchema: [{ AttributeName: "run_id", KeyType: "HASH" as const }],
+        Projection: { ProjectionType: "ALL" as const },
+      },
+    ],
+    BillingMode: "PAY_PER_REQUEST" as const,
+  },
 ];
 
 export async function createTables(): Promise<void> {

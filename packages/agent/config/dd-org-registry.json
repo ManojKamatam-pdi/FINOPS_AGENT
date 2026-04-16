@@ -1,1 +1,22 @@
+<<<<<<< HEAD
 
+=======
+[
+  {
+    "tenant_id": "PDI-Enterprise",
+    "display_name": "PDI Enterprise",
+    "dd_api_key": "REPLACE_ME",
+    "dd_app_key": "REPLACE_ME",
+    "dd_site": "datadoghq.com",
+    "enabled": true
+  },
+  {
+    "tenant_id": "PDI-Orbis",
+    "display_name": "PDI Orbis",
+    "dd_api_key": "REPLACE_ME",
+    "dd_app_key": "REPLACE_ME",
+    "dd_site": "datadoghq.com",
+    "enabled": true
+  }
+]
+>>>>>>> abde6c3 (Working Prototype)

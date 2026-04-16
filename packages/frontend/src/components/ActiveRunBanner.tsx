@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 
 interface Props {
   onRunCompleted?: () => void;
+  onAborted?: () => void;
 }
 
 function formatElapsed(startedAt: string): string {
@@ -17,7 +18,7 @@ function formatElapsed(startedAt: string): string {
   return `<1m`;
 }
 
-export default function ActiveRunBanner({ onRunCompleted }: Props) {
+export default function ActiveRunBanner({ onRunCompleted, onAborted }: Props) {
   const { token } = useAuth();
   const [activeRun, setActiveRun] = useState<ActiveRunInfo | null>(null);
   const [showAbortModal, setShowAbortModal] = useState(false);
@@ -69,6 +70,7 @@ export default function ActiveRunBanner({ onRunCompleted }: Props) {
       await abortRun(token, activeRun.run_id);
       setShowAbortModal(false);
       setActiveRun(null);
+      onAborted?.();
       onRunCompleted?.();
     } catch (err) {
       console.error('Abort failed:', err);

@@ -220,13 +220,15 @@ apiRouter.get("/results", async (req: AuthenticatedRequest, res: Response): Prom
           ? Math.round((savings / cost) * 1000) / 10
           : null;
 
-      // Normalize cloud_provider: "unknown (on-prem/bare-metal)" → "on-prem",
-      // and "unknown" with no instance_type/region → "on-prem"
+      // write_host_result_tool already normalizes cloud_provider to canonical values
+      // ("aws" | "azure" | "gcp" | "on-prem" | "unknown") before writing to DynamoDB.
+      // This pass only handles any residual non-canonical variants that may exist in
+      // older run data — it must NOT remap ambiguous "unknown" variants to "on-prem"
+      // because write_host_result_tool correctly stores those as "unknown" (no positive evidence).
       const providerNormMap: Record<string, string> = {
         "on-premise": "on-prem", "on-premises": "on-prem",
-        "on-prem/unknown": "on-prem", "onprem": "on-prem", "on_prem": "on-prem",
+        "onprem": "on-prem", "on_prem": "on-prem",
         "bare-metal": "on-prem", "baremetal": "on-prem", "vmware": "on-prem",
-        "unknown (on-prem/bare-metal)": "on-prem", "unknown (on-prem)": "on-prem",
       };
       const rawProvider = String(h["cloud_provider"] ?? "unknown").toLowerCase();
       let cloud_provider = providerNormMap[rawProvider] ?? h["cloud_provider"];

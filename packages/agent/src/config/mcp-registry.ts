@@ -27,17 +27,13 @@ const DD_MCP_BASE: Record<string, string> = {
  *
  * Uses the "core" toolset which includes: hosts, metrics, logs, monitors,
  * dashboards, incidents, services, events, notebooks, traces, spans, RUM.
+ * Note: Datadog MCP does not expose SLO tools — SLOs are fetched via REST API directly.
  */
 export function getDatadogMcpServers(): Record<string, HttpMcpServer> {
   const tenants = getTenants();
   const servers: Record<string, HttpMcpServer> = {};
 
   for (const tenant of tenants) {
-    if (!tenant.dd_api_key || tenant.dd_api_key === "REPLACE_ME") {
-      console.warn(`[mcp_registry] Skipping '${tenant.tenant_id}' — dd_api_key not configured`);
-      continue;
-    }
-
     const site = tenant.dd_site ?? "datadoghq.com";
     const baseUrl = DD_MCP_BASE[site] ?? DD_MCP_BASE["datadoghq.com"];
 
@@ -45,8 +41,8 @@ export function getDatadogMcpServers(): Record<string, HttpMcpServer> {
       type: "http",
       url: `${baseUrl}?toolsets=core`,
       headers: {
-        DD_API_KEY: tenant.dd_api_key,
-        DD_APPLICATION_KEY: tenant.dd_app_key,
+        "DD-API-KEY": tenant.dd_api_key,
+        "DD-APPLICATION-KEY": tenant.dd_app_key,
       },
     };
   }

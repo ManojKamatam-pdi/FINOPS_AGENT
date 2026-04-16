@@ -1,5 +1,5 @@
-- All UI UX stuff should be done as per pdi-claude-skills-market skills of UI/UX
-- For all build agents I ask only build sdk agents and use this skill to built building full autonomous agents with the Claude Agent SDK, agent-sdk-dev Plugin claude-plugins-official
+- All UI UX stuff should be done as per pdi-Codex-skills-market skills of UI/UX
+- For all build agents I ask only build sdk agents and use this skill to built building full autonomous agents with the Codex Agent SDK, agent-sdk-dev Plugin Codex-plugins-official
 - Always use Datadog MCP thats configured for agents over APIs
 - you must verify with playwright on all the fixed or implemenatations you did, and you should not mess it with lot many usecase, exactly test what you did is functional, if UI UX? check you did as per the skills as well.
 - ALWAYS run Playwright using this exact pattern (never npx playwright directly — it fails on this machine):

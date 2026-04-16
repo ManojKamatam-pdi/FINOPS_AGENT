@@ -56,6 +56,7 @@ export interface HostResult {
   host_id: string;
   host_name: string;
   cloud_provider: string;
+  host_subtype: string | null;
   cpu_avg_30d: number | null;
   cpu_p95_30d: number | null;
   ram_avg_30d: number | null;
